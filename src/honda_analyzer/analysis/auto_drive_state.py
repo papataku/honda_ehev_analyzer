@@ -52,6 +52,8 @@ class AutoDriveStateTracker:
 
         engine_on = rpm >= 150.0
         moving = speed >= 1.0
+        # Absolute pedal PID 49 can have a non-zero released baseline on some cars
+        # (RP8 session-12 was about 20%).  Do not infer pedal release from a fixed 0-3% threshold.
         driver_input = pedal if pedal is not None else throttle
 
         if not moving:
