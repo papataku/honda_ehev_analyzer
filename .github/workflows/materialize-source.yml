@@ -1,0 +1,57 @@
+name: Materialize v0.3.4 source tree
+
+on:
+  push:
+    paths:
+      - '.github/workflows/materialize-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact source pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d _bootstrap
+          test -f _bootstrap/pack6k.000
+          cat _bootstrap/pack6k.* | tr -d '\r\n' | base64 --decode > /tmp/honda-source.tar.xz
+          mkdir -p /tmp/honda-source
+          tar -xJf /tmp/honda-source.tar.xz -C /tmp/honda-source
+
+          if [ -d /tmp/honda-source/honda_ehev_analyzer ]; then
+            SOURCE_DIR=/tmp/honda-source/honda_ehev_analyzer
+          else
+            SOURCE_DIR=/tmp/honda-source
+          fi
+
+          test -f "$SOURCE_DIR/pyproject.toml"
+          test -d "$SOURCE_DIR/src/honda_analyzer"
+          test -d "$SOURCE_DIR/tests"
+
+          rsync -a "$SOURCE_DIR/" ./
+          rm -rf _bootstrap
+
+          python -m compileall -q src
+
+      - name: Commit materialized source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source-tree changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: materialize v0.3.4 source tree"
+          git push origin HEAD:main
