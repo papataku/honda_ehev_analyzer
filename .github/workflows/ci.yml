@@ -1,0 +1,57 @@
+name: Python 3.12 regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check bootstrap state
+        id: bootstrap
+        shell: bash
+        run: |
+          if [[ -f src/honda_analyzer/gui/app.py &&                 -f tests/test_phase34_long_did_buffer_recovery.py ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Full canonical source is not materialized yet; see Issue #1."
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.bootstrap.outputs.ready == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        if: steps.bootstrap.outputs.ready == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Test
+        if: steps.bootstrap.outputs.ready == 'true'
+        run: python -m pytest -q
+
+      - name: Compile
+        if: steps.bootstrap.outputs.ready == 'true'
+        run: python -m compileall -q src
