@@ -22,3 +22,6 @@ session-*.zip
 raw_capture*.jsonl
 debug-bundles/
 readiness/
+
+# One-time canonical source bootstrap environment
+.venv-bootstrap/
