@@ -39,3 +39,14 @@ Updated baseline: v0.3.4 — Long DID Recovery.
 
 ## Next expected user workflow
 For v0.3.4, the immediate test is stationary DID discovery, not driving. Confirm that long DIDs such as 2019 no longer stall the scan and are shown as complete or partial. Export a Debug Bundle after the run for analysis.
+
+
+## Canonical bootstrap status
+The one-time full-source import is tracked by GitHub Issue #1.
+Until that issue is closed, the repository contains the durable project context
+and a partial initial import, but it must not be treated as a complete buildable
+v0.3.4 checkout. The verified bootstrap input is the v0.3.4 release ZIP with
+SHA-256 `bae24021b3ca8b1587817821f2db7799ccac3f9dc707aecad962382a30c20d3d`.
+Use `tools/bootstrap_v034_from_zip.sh` and
+`docs/BOOTSTRAP_CANONICAL_SOURCE.md` to materialize the complete tested tree.
+After Issue #1 is closed, GitHub `main` is the sole development source of truth.
