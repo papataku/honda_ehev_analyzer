@@ -1,0 +1,10 @@
+{
+  "vehicle": "Honda STEP WGN RP8 e:HEV 2023",
+  "signals": [
+    {"name":"Engine RPM","header":"18DB33F1","service":"01","pid":"0C","formula":"((A*256)+B)/4","unit":"rpm","status":"KNOWN"},
+    {"name":"Vehicle Speed","header":"18DB33F1","service":"01","pid":"0D","formula":"A","unit":"km/h","status":"KNOWN"},
+    {"name":"Coolant","header":"18DB33F1","service":"01","pid":"05","formula":"A-40","unit":"degC","status":"KNOWN"},
+    {"name":"Hybrid EV System","header":"18DB33F1","service":"01","pid":"9A","status":"TODO-VEHICLE-TEST","notes":"Multi-frame; HV voltage/current offsets must be confirmed from existing capture."},
+    {"name":"Honda DID 2012","header":"18DBEFF1","service":"22","did":"2012","status":"CANDIDATE","notes":"Known positive request; semantics intentionally unspecified. Preserve full ISO-TP payload and response CAN ID."}
+  ]
+}

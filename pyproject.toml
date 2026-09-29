@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "honda-ehev-analyzer"
+version = "0.3.4"
+description = "macOS Honda e:HEV CAN/OBD-II/UDS analyzer"
+requires-python = ">=3.12"
+dependencies = ["bleak>=0.22", "PySide6>=6.7", "pyqtgraph>=0.13", "numpy>=1.26", "pandas>=2.2", "scipy>=1.12"]
+
+[project.optional-dependencies]
+mac = ["bleak>=0.22", "PySide6>=6.7", "pyqtgraph>=0.13", "numpy>=1.26", "pandas>=2.2", "scipy>=1.12"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[project.scripts]
+honda-analyzer = "honda_analyzer.gui.app:main"
+honda-analyzer-preflight = "honda_analyzer.preflight:main"
