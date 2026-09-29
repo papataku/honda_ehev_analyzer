@@ -1,57 +1,27 @@
-name: Materialize v0.3.4 source tree
+name: Canonical source bootstrap status
 
 on:
   push:
     paths:
       - '.github/workflows/materialize-source.yml'
+      - 'tools/bootstrap_v034_from_zip.sh'
+      - 'docs/BOOTSTRAP_CANONICAL_SOURCE.md'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  materialize:
+  status:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Reconstruct exact source pack
+      - name: Report canonical-source state
         shell: bash
         run: |
-          set -euo pipefail
-          test -d _bootstrap
-          test -f _bootstrap/pack6k.000
-          cat _bootstrap/pack6k.* | tr -d '\r\n' | base64 --decode > /tmp/honda-source.tar.xz
-          mkdir -p /tmp/honda-source
-          tar -xJf /tmp/honda-source.tar.xz -C /tmp/honda-source
-
-          if [ -d /tmp/honda-source/honda_ehev_analyzer ]; then
-            SOURCE_DIR=/tmp/honda-source/honda_ehev_analyzer
+          if [[ -f src/honda_analyzer/gui/app.py &&                 -f src/honda_analyzer/build_info.py &&                 -f tests/test_phase34_long_did_buffer_recovery.py ]]; then
+            echo "Canonical source tree is materialized."
           else
-            SOURCE_DIR=/tmp/honda-source
+            echo "::warning::Canonical v0.3.4 bootstrap is still pending (Issue #1)."
+            echo "Run tools/bootstrap_v034_from_zip.sh with the verified release ZIP."
           fi
-
-          test -f "$SOURCE_DIR/pyproject.toml"
-          test -d "$SOURCE_DIR/src/honda_analyzer"
-          test -d "$SOURCE_DIR/tests"
-
-          rsync -a "$SOURCE_DIR/" ./
-          rm -rf _bootstrap
-
-          python -m compileall -q src
-
-      - name: Commit materialized source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No source-tree changes to commit."
-            exit 0
-          fi
-          git commit -m "chore: materialize v0.3.4 source tree"
-          git push origin HEAD:main
