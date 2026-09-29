@@ -76,3 +76,14 @@ This repository is the source of truth for the Honda e:HEV Analyzer. Future codi
 2. Accumulate Positive/partial Positive DID inventory across observed ECUs.
 3. Once inventory coverage is useful, run a drive sweep that samples all discovered DIDs while recording known OBD/HV references.
 4. Analyze for traction motor RPM, generator RPM, torque/current candidates; do not infer from names or ID proximity alone.
+
+
+## Canonical bootstrap status
+The one-time full-source import is tracked by GitHub Issue #1.
+Until that issue is closed, the repository contains the durable project context
+and a partial initial import, but it must not be treated as a complete buildable
+v0.3.4 checkout. The verified bootstrap input is the v0.3.4 release ZIP with
+SHA-256 `bae24021b3ca8b1587817821f2db7799ccac3f9dc707aecad962382a30c20d3d`.
+Use `tools/bootstrap_v034_from_zip.sh` and
+`docs/BOOTSTRAP_CANONICAL_SOURCE.md` to materialize the complete tested tree.
+After Issue #1 is closed, GitHub `main` is the sole development source of truth.
