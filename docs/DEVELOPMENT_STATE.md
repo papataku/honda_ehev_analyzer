@@ -41,12 +41,12 @@ Updated baseline: v0.3.4 — Long DID Recovery.
 For v0.3.4, the immediate test is stationary DID discovery, not driving. Confirm that long DIDs such as 2019 no longer stall the scan and are shown as complete or partial. Export a Debug Bundle after the run for analysis.
 
 
-## Canonical bootstrap status
-The one-time full-source import is tracked by GitHub Issue #1.
-Until that issue is closed, the repository contains the durable project context
-and a partial initial import, but it must not be treated as a complete buildable
-v0.3.4 checkout. The verified bootstrap input is the v0.3.4 release ZIP with
-SHA-256 `bae24021b3ca8b1587817821f2db7799ccac3f9dc707aecad962382a30c20d3d`.
-Use `tools/bootstrap_v034_from_zip.sh` and
-`docs/BOOTSTRAP_CANONICAL_SOURCE.md` to materialize the complete tested tree.
-After Issue #1 is closed, GitHub `main` is the sole development source of truth.
+## Canonical repository status
+The one-time ZIP-to-Git transition is complete.
+
+- GitHub `main` contains the full v0.3.4 source, tests, documentation, launch scripts and signal assets.
+- Python 3.12 CI installs the package, runs the full test suite, and runs `compileall`.
+- Canonicalization was completed by commits `18c4987` / `09a634f`, followed by the CI hardening commit `3c5c673`.
+- The full regression run passed **146 tests** and `python -m compileall -q src`.
+- Temporary bootstrap helpers were removed after verification.
+- GitHub `main` is now the sole development source of truth. Release ZIPs are derived artifacts only.
