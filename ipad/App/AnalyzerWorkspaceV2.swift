@@ -161,7 +161,10 @@ private struct DashboardPage: View {
                 }
 
                 if model.liveSamples.count >= 2 {
-                    HStack(alignment: .top, spacing: 12) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 300), spacing: 12)],
+                        spacing: 12
+                    ) {
                         LiveTrendCard(
                             title: "RPM trend",
                             unit: "rpm",
