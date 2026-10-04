@@ -24,6 +24,23 @@ Updated baseline: v0.3.4 — Long DID Recovery.
 - Session 15 found 17 Positive/partial-positive DIDs in ECU source 01 around 0x2000; see PROJECT_CONTEXT.
 - Several long positives reached `BUFFER FULL`; v0.3.4 preserves and retries them.
 
+## iPad native validation — 2026-10-04
+
+The first physical iPad/KW905/RP8 capture has passed the iPad hardware gate.
+
+- CoreBluetooth selected the expected KW905 path: FFF0 / FFF1 notify / FFF2 write-without-response.
+- ELM initialization reported ELM327 v1.5 and ISO 15765-4 CAN 29-bit / 500 kbps.
+- Standard known signals 010C / 010D / 0105 / 015B / 019A were read successfully.
+- The iPad SQLite capture closed cleanly and passed `PRAGMA integrity_check`.
+- Safe ECU census observed the same Mode 01 responder set used by the macOS workflow.
+- Source-01 stationary DID discovery covered 2000–207B before manual stop.
+- The scanned subset produced exactly 6 complete Positive + 11 positive_partial DIDs matching the prior Session-15 source-01 inventory in that range.
+- Real BUFFER FULL handling was exercised for all 11 long positives.
+- ATH0 compact retry increased preserved application prefixes from about 70–78 bytes to 108–112 bytes, but still did not recover the complete long payload.
+- The raw user capture is not committed; only these validation conclusions are retained.
+
+With the hardware gate passed, the iPad branch is moving to the same adaptive full-range ordering as macOS, while retaining read-only 0x22 and stationary speed monitoring.
+
 ## Current unresolved goals
 1. Continue stationary discovery to build a larger Positive DID inventory across observed responders.
 2. Verify compact retry can turn some Session-15-style partial positives into complete payloads on the real KW905.
