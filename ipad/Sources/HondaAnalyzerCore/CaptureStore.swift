@@ -106,6 +106,28 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
+    public func saveDevice(
+        sessionID: Int64,
+        kind: String,
+        identifier: String,
+        metadataJSON: String
+    ) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let s = try self.prepare(
+                    "INSERT INTO devices(session_id,kind,identifier,metadata_json) VALUES(?,?,?,?)"
+                )
+                defer { sqlite3_finalize(s) }
+                sqlite3_bind_int64(s, 1, sessionID)
+                self.bindText(s, 2, kind)
+                self.bindText(s, 3, identifier)
+                self.bindText(s, 4, metadataJSON)
+                try self.stepDone(s)
+            } catch { self.report(error) }
+        }
+    }
+
     public func addEvent(sessionID: Int64, at date: Date, kind: String, note: String? = nil) {
         queue.async { [weak self] in
             guard let self else { return }
