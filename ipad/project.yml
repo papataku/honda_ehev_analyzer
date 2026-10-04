@@ -27,3 +27,5 @@ targets:
         UILaunchScreen: {}
         UIBackgroundModes:
           - bluetooth-central
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true

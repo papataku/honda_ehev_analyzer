@@ -7,10 +7,13 @@ final class AnalyzerViewModel: ObservableObject {
     private let session: ElmCommandSession
     private var captureStore: CaptureStore?
     private var captureSessionID: Int64?
+    private var liveTask: Task<Void, Never>?
 
     @Published var isBusy = false
+    @Published var isLivePolling = false
     @Published var isRecording = false
     @Published var recordingFile = ""
+    @Published var recordingURL: URL?
     @Published var statusMessage = "KW905へ接続してください"
     @Published var rpm: Double?
     @Published var speedKmh: Int?
@@ -25,7 +28,6 @@ final class AnalyzerViewModel: ObservableObject {
         let transport = KW905BLETransport()
         self.ble = transport
         self.session = ElmCommandSession(transport: transport)
-
         session.onRawReceive = { [weak self] data in self?.recordRaw(data) }
         session.onResult = { [weak self] result in self?.recordCommand(result) }
     }
@@ -38,8 +40,7 @@ final class AnalyzerViewModel: ObservableObject {
             )
             let folder = documents.appendingPathComponent("HondaAnalyzerSessions", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let stamp = ISO8601DateFormatter().string(from: Date())
-                .replacingOccurrences(of: ":", with: "-")
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let url = folder.appendingPathComponent("session-\(stamp).sqlite3")
             let store = try CaptureStore(url: url)
             store.onError = { [weak self] error in
@@ -48,6 +49,7 @@ final class AnalyzerViewModel: ObservableObject {
             let sid = try store.createSession(toolVersion: "ipad-native")
             captureStore = store
             captureSessionID = sid
+            recordingURL = url
             recordingFile = url.lastPathComponent
             isRecording = true
             statusMessage = "記録開始"
@@ -80,7 +82,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func initializeELM() {
-        guard !isBusy else { return }
+        guard !isBusy, !isLivePolling else { return }
         isBusy = true
         statusMessage = "ELM初期化中"
         Task {
@@ -93,33 +95,13 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func readKnownSignals() {
-        guard !isBusy else { return }
+        guard !isBusy, !isLivePolling else { return }
         isBusy = true
         statusMessage = "既知信号を取得中"
-
         Task {
             do {
-                try await sendAT("ATCP18")
-                try await sendAT("ATSHDB33F1")
-
-                let rpmResult = try await session.command("010C"); append(rpmResult)
-                rpm = decodeEngineRPM(rpmResult.text)
-
-                let speedResult = try await session.command("010D"); append(speedResult)
-                speedKmh = decodeVehicleSpeed(speedResult.text)
-
-                let coolantResult = try await session.command("0105"); append(coolantResult)
-                coolantC = decodeCoolantC(coolantResult.text)
-
-                let socResult = try await session.command("015B"); append(socResult)
-                socPercent = decodeBatterySOC(socResult.text)
-
-                let hybridResult = try await session.command("019A"); append(hybridResult)
-                if let hybrid = decodeHybridEv9A(hybridResult.text) {
-                    hvVoltage = hybrid.voltageV
-                    hvCurrent = hybrid.currentA
-                    hvPowerKW = hybrid.powerKW
-                }
+                try await prepareMode01()
+                try await pollKnownCycle()
                 statusMessage = "既知信号取得完了"
             } catch {
                 statusMessage = "取得失敗: \(error.localizedDescription)"
@@ -129,12 +111,76 @@ final class AnalyzerViewModel: ObservableObject {
         }
     }
 
+    func startLivePolling() {
+        guard !isBusy, !isLivePolling else { return }
+        isLivePolling = true
+        statusMessage = "既知信号ライブ取得中"
+
+        liveTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await prepareMode01()
+                while !Task.isCancelled {
+                    try await pollKnownCycle()
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            } catch is CancellationError {
+            } catch {
+                statusMessage = "ライブ取得停止: \(error.localizedDescription)"
+                transcript.append("ERROR  \(error)")
+            }
+            isLivePolling = false
+            liveTask = nil
+        }
+    }
+
+    func stopLivePolling() {
+        liveTask?.cancel()
+        liveTask = nil
+        isLivePolling = false
+        statusMessage = "ライブ取得停止"
+    }
+
+    private func prepareMode01() async throws {
+        try await sendAT("ATCP18")
+        try await sendAT("ATSHDB33F1")
+    }
+
+    private func pollKnownCycle() async throws {
+        let rpmResult = try await session.command("010C")
+        append(rpmResult)
+        rpm = decodeEngineRPM(rpmResult.text)
+
+        let speedResult = try await session.command("010D")
+        append(speedResult)
+        speedKmh = decodeVehicleSpeed(speedResult.text)
+
+        let coolantResult = try await session.command("0105")
+        append(coolantResult)
+        coolantC = decodeCoolantC(coolantResult.text)
+
+        let socResult = try await session.command("015B")
+        append(socResult)
+        socPercent = decodeBatterySOC(socResult.text)
+
+        let hybridResult = try await session.command("019A")
+        append(hybridResult)
+        if let hybrid = decodeHybridEv9A(hybridResult.text) {
+            hvVoltage = hybrid.voltageV
+            hvCurrent = hybrid.currentA
+            hvPowerKW = hybrid.powerKW
+        }
+    }
+
     private func sendAT(_ command: String) async throws {
         let result = try await session.command(command)
         append(result)
         if !result.success {
-            throw NSError(domain: "HondaAnalyzer.ELM", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(result.text)"])
+            throw NSError(
+                domain: "HondaAnalyzer.ELM",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "\(command) failed: \(result.text)"]
+            )
         }
     }
 

@@ -17,7 +17,7 @@ struct ContentView: View {
                             try? await Task.sleep(nanoseconds: 5_000_000_000)
                             await MainActor.run { model.ble.stopScan() }
                         }
-                    }.disabled(model.isBusy)
+                    }.disabled(model.isBusy || model.isLivePolling)
 
                     ForEach(model.ble.devices) { device in
                         Button { try? model.ble.connect(to: device.id) } label: {
@@ -36,14 +36,27 @@ struct ContentView: View {
                     } else {
                         Button("SQLite記録開始") { model.startRecording() }
                             .disabled(model.ble.state != "ready")
+                        if let url = model.recordingURL {
+                            ShareLink(item: url) {
+                                Label("直前のSQLiteを共有", systemImage: "square.and.arrow.up")
+                            }
+                        }
                     }
                 }
 
                 Section("ELM / 車両") {
                     Button("ELM初期化") { model.initializeELM() }
-                        .disabled(model.ble.state != "ready" || model.isBusy)
-                    Button("既知信号を取得") { model.readKnownSignals() }
-                        .disabled(model.ble.state != "ready" || model.isBusy)
+                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling)
+                    Button("既知信号を1回取得") { model.readKnownSignals() }
+                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling)
+
+                    if model.isLivePolling {
+                        Button("ライブ取得停止", role: .destructive) { model.stopLivePolling() }
+                    } else {
+                        Button("既知信号ライブ取得開始") { model.startLivePolling() }
+                            .disabled(model.ble.state != "ready" || model.isBusy)
+                    }
+
                     Text(model.statusMessage).font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -55,6 +68,7 @@ struct ContentView: View {
                         Text("RP8 Live").font(.largeTitle.bold())
                         Spacer()
                         if model.isRecording { Label("REC", systemImage: "record.circle.fill") }
+                        if model.isLivePolling { Label("LIVE", systemImage: "waveform.path.ecg") }
                         if model.isBusy { ProgressView() }
                     }
 
@@ -102,6 +116,7 @@ private struct MetricCard: View {
     let title: String
     let value: String
     let unit: String
+
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {

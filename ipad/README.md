@@ -40,3 +40,9 @@ The UI shows RPM, speed, coolant, SOC, HV voltage/current/power and keeps a comm
 The iPad port now writes the Mac-compatible SQLite schema with WAL + FULL synchronous durability.
 Incoming BLE notification chunks are stored in `raw_capture`, completed ELM commands in `commands`, and drive markers in `events`.
 Writes use a dedicated serial queue so UI rendering is not used as the storage execution path.
+
+
+## Continuous live capture and export
+Known signals can now be polled continuously with one serialized pass per cycle and a one-second inter-cycle delay.
+The live cycle reads 010C/010D/0105/015B/019A only.
+Completed SQLite sessions can be exported through the iPad share sheet, and the app Documents directory is exposed to Files.
