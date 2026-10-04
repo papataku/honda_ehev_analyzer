@@ -19,6 +19,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var isDidScanning = false
     @Published var isRecording = false
     @Published var stationaryConfirmed = false
+    @Published var longDidScanAcknowledged = false
     @Published var didScanEcu = "01"
     @Published var didScanRateHz = 5.0
     @Published var didScanProgress = 0.0
@@ -222,6 +223,18 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startDidScan2000Range() {
+        startDidScan(start: 0x2000, end: 0x20FF, adaptive: false)
+    }
+
+    func startAdaptiveFullDidScan() {
+        guard longDidScanAcknowledged else {
+            statusMessage = "全範囲探索は長時間になるため確認チェックが必要です"
+            return
+        }
+        startDidScan(start: 0x0000, end: 0xFFFF, adaptive: true)
+    }
+
+    private func startDidScan(start: UInt16, end: UInt16, adaptive: Bool) {
         guard !isBusy, !isLivePolling, !isDidScanning else { return }
         guard stationaryConfirmed else {
             statusMessage = "DID探索前に完全停止・Pレンジ確認をチェックしてください"
@@ -240,7 +253,9 @@ final class AnalyzerViewModel: ObservableObject {
         isDidScanning = true
         didScanProgress = 0
         didScanCurrent = "準備中"
-        statusMessage = "停車確認後、DID 2000–20FFを探索します"
+        statusMessage = adaptive
+            ? "停車確認後、adaptive full-range DID探索を開始します"
+            : "停車確認後、DID 2000–20FFを探索します"
 
         didScanTask = Task { [weak self] in
             guard let self else { return }
@@ -250,8 +265,16 @@ final class AnalyzerViewModel: ObservableObject {
 
             do {
                 store.flush()
-                let completed = try store.completedDids(ecu: ecu, start: 0x2000, end: 0x20FF)
-                refreshPositiveDids()
+                let historyURLs = captureDatabaseURLs()
+                let history = loadDidScanHistory(
+                    from: historyURLs,
+                    ecu: ecu,
+                    start: start,
+                    end: end
+                )
+                var completed = history.completed
+                completed.formUnion(try store.completedDids(ecu: ecu, start: start, end: end))
+                let positiveHints = history.positiveHints
 
                 guard let speed = try await readScanSpeed(), speed <= 0.1 else {
                     didScanCurrent = "安全停止"
@@ -272,27 +295,46 @@ final class AnalyzerViewModel: ObservableObject {
                     }
                 }
 
-                let pending = (0x2000...0x20FF).filter { !completed.contains(UInt16($0)) }
-                let total = max(1, pending.count)
-                var processed = 0
+                let rangeCount = Int(end) - Int(start) + 1
+                let total = max(1, rangeCount - completed.count)
+                var attempted = Set<UInt16>()
                 var consecutiveErrors = 0
                 var nextSpeedCheck = Date()
+                var aborted = false
+                var sectorScores: [Int: Int] = [:]
+                var pageScores: [Int: Int] = [:]
+                var deepScannedPages = Set<Int>()
 
-                for rawDid in pending {
-                    if didScanStopRequested || Task.isCancelled { break }
-                    let did = UInt16(rawDid)
+                for did in positiveHints where start <= did && did <= end {
+                    sectorScores[didSectorIndex(did), default: 0] += 100
+                    pageScores[didPageIndex(did), default: 0] += 100
+                }
+
+                func isPending(_ did: UInt16) -> Bool {
+                    did >= start && did <= end &&
+                    !completed.contains(did) &&
+                    !attempted.contains(did)
+                }
+
+                func probeOne(_ did: UInt16, phase: String) async throws {
+                    if aborted || didScanStopRequested || Task.isCancelled || !isPending(did) {
+                        return
+                    }
 
                     if Date() >= nextSpeedCheck {
                         let speed = try await readScanSpeed()
                         guard let speed, speed <= 0.1 else {
                             let stopped = DidProbeOutcome(
-                                ecu: ecu, did: did, status: .stoppedSpeed,
+                                ecu: ecu,
+                                did: did,
+                                status: .stoppedSpeed,
                                 rawText: speed.map { "vehicle speed \($0) km/h" } ?? "vehicle speed unavailable"
                             )
                             store.saveDidScan(sessionID: sid, at: Date(), outcome: stopped)
                             didScanCurrent = "安全停止 DID \(String(format: "%04X", did))"
                             statusMessage = "車速が0 km/hと確認できなくなったためDID探索を停止しました"
-                            break
+                            aborted = true
+                            return
                         }
                         nextSpeedCheck = Date().addingTimeInterval(2.0)
                     }
@@ -300,10 +342,13 @@ final class AnalyzerViewModel: ObservableObject {
                     let started = Date()
                     let outcome = await requestDidWithCompactRetry(ecu: ecu, did: did)
                     store.saveDidScan(sessionID: sid, at: Date(), outcome: outcome)
+                    attempted.insert(did)
 
-                    processed += 1
-                    didScanProgress = Double(processed) / Double(total)
-                    didScanCurrent = "ECU \(ecu) / DID \(String(format: "%04X", did)) / \(outcome.status.rawValue)"
+                    let score = didOutcomeInterestScore(status: outcome.status, nrc: outcome.nrc)
+                    if score > 0 {
+                        sectorScores[didSectorIndex(did), default: 0] += score
+                        pageScores[didPageIndex(did), default: 0] += score
+                    }
 
                     if outcome.status == .positive || outcome.status == .positivePartial {
                         consecutiveErrors = 0
@@ -314,9 +359,15 @@ final class AnalyzerViewModel: ObservableObject {
                         consecutiveErrors += 1
                     }
 
+                    didScanProgress = min(1.0, Double(attempted.count) / Double(total))
+                    didScanCurrent =
+                        "\(phase) / ECU \(ecu) / DID \(String(format: "%04X", did)) / " +
+                        "\(attempted.count)/\(total) / \(outcome.status.rawValue)"
+
                     if consecutiveErrors >= 5 {
                         statusMessage = "通信エラーが5回連続したため安全停止しました"
-                        break
+                        aborted = true
+                        return
                     }
 
                     let period = 1.0 / rate
@@ -326,12 +377,115 @@ final class AnalyzerViewModel: ObservableObject {
                     }
                 }
 
+                func probeCandidates(_ candidates: [UInt16], phase: String) async throws {
+                    for did in candidates {
+                        if aborted || didScanStopRequested || Task.isCancelled { return }
+                        try await probeOne(did, phase: phase)
+                    }
+                }
+
+                if !adaptive || rangeCount <= 0x100 {
+                    let candidates = (Int(start)...Int(end)).map(UInt16.init)
+                    try await probeCandidates(candidates, phase: "通常順序")
+                } else {
+                    try await probeCandidates(
+                        didKnownPriority(start: start, end: end),
+                        phase: "1/5 既知2000帯"
+                    )
+
+                    if !aborted && !didScanStopRequested && !Task.isCancelled {
+                        try await probeCandidates(
+                            didSectorHeads(start: start, end: end, width: 4),
+                            phase: "2/5 16領域先頭"
+                        )
+                    }
+
+                    if !aborted && !didScanStopRequested && !Task.isCancelled {
+                        for sector in didPrioritizedSectors(
+                            start: start,
+                            end: end,
+                            scores: sectorScores
+                        ) {
+                            try await probeCandidates(
+                                didPageSentinels(
+                                    sector: sector,
+                                    start: start,
+                                    end: end,
+                                    offsets: [0x00, 0x80]
+                                ),
+                                phase: "3/5 0x100ページ代表"
+                            )
+                            if aborted || didScanStopRequested || Task.isCancelled { break }
+
+                            let hotPages = didPagesInSector(sector, start: start, end: end)
+                                .filter { pageScores[$0, default: 0] > 0 && !deepScannedPages.contains($0) }
+                                .sorted {
+                                    let left = pageScores[$0, default: 0]
+                                    let right = pageScores[$1, default: 0]
+                                    if left != right { return left > right }
+                                    return $0 < $1
+                                }
+
+                            for page in hotPages {
+                                guard let bounds = didPageBounds(page) else { continue }
+                                let lo = max(Int(start), Int(bounds.lowerBound))
+                                let hi = min(Int(end), Int(bounds.upperBound))
+                                if lo <= hi {
+                                    try await probeCandidates(
+                                        (lo...hi).map(UInt16.init),
+                                        phase: "4/5 反応ページ深掘り"
+                                    )
+                                    deepScannedPages.insert(page)
+                                }
+                                if aborted || didScanStopRequested || Task.isCancelled { break }
+                            }
+
+                            if aborted || didScanStopRequested || Task.isCancelled { break }
+                        }
+                    }
+
+                    if !aborted && !didScanStopRequested && !Task.isCancelled {
+                        for sector in didPrioritizedSectors(
+                            start: start,
+                            end: end,
+                            scores: sectorScores
+                        ) {
+                            for page in didPrioritizedPages(
+                                sector: sector,
+                                start: start,
+                                end: end,
+                                scores: pageScores
+                            ) {
+                                guard let bounds = didPageBounds(page) else { continue }
+                                let lo = max(Int(start), Int(bounds.lowerBound))
+                                let hi = min(Int(end), Int(bounds.upperBound))
+                                if lo <= hi {
+                                    try await probeCandidates(
+                                        (lo...hi).map(UInt16.init),
+                                        phase: "5/5 未探索全埋め"
+                                    )
+                                }
+                                if aborted || didScanStopRequested || Task.isCancelled { break }
+                            }
+                            if aborted || didScanStopRequested || Task.isCancelled { break }
+                        }
+                    }
+                }
+
                 store.flush()
                 refreshPositiveDids()
+
                 if didScanStopRequested || Task.isCancelled {
-                    statusMessage = "DID探索を停止しました。保存済み結果から再開できます"
-                } else if didScanProgress >= 0.999 {
-                    statusMessage = "DID 2000–20FFの探索が完了しました"
+                    statusMessage = "DID探索を停止しました。過去のSQLiteを含む保存済み結果から再開できます"
+                } else if aborted {
+                    // Specific safety/error reason has already been set.
+                } else if attempted.count >= total {
+                    statusMessage = adaptive
+                        ? "adaptive full-range DID探索が完了しました"
+                        : "DID 2000–20FFの探索が完了しました"
+                    didScanProgress = 1.0
+                } else {
+                    statusMessage = "DID探索を終了しました。未探索分は次回resumeされます"
                 }
             } catch is CancellationError {
                 statusMessage = "DID探索を停止しました。保存済み結果は残っています"
@@ -349,6 +503,32 @@ final class AnalyzerViewModel: ObservableObject {
             isDidScanning = false
             didScanTask = nil
         }
+    }
+
+    private func captureDatabaseURLs() -> [URL] {
+        guard let documents = try? FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return recordingURL.map { [$0] } ?? [] }
+
+        let folder = documents.appendingPathComponent("HondaAnalyzerSessions", isDirectory: true)
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var result = urls.filter {
+            $0.pathExtension.lowercased() == "sqlite3" &&
+            !$0.lastPathComponent.hasSuffix("-wal") &&
+            !$0.lastPathComponent.hasSuffix("-shm")
+        }
+        if let recordingURL, !result.contains(recordingURL) {
+            result.append(recordingURL)
+        }
+        return result
     }
 
     func stopDidScan() {
