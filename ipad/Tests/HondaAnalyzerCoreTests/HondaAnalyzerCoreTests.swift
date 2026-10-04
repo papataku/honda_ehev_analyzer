@@ -342,4 +342,55 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         ), 6553.6, accuracy: 0.001)
     }
 
+#if canImport(SQLite3)
+    func testDidScanHistoryUnionsTerminalResultsAcrossCaptureFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("honda-ipad-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let firstURL = dir.appendingPathComponent("first.sqlite3")
+        let secondURL = dir.appendingPathComponent("second.sqlite3")
+
+        let first = try CaptureStore(url: firstURL)
+        let firstSession = try first.createSession()
+        first.saveDidScan(
+            sessionID: firstSession,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2012, status: .positive)
+        )
+        first.saveDidScan(
+            sessionID: firstSession,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2014, status: .nrc, nrc: 0x31)
+        )
+        first.flush()
+
+        let second = try CaptureStore(url: secondURL)
+        let secondSession = try second.createSession()
+        second.saveDidScan(
+            sessionID: secondSession,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2025, status: .positivePartial)
+        )
+        second.saveDidScan(
+            sessionID: secondSession,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2026, status: .noData)
+        )
+        second.flush()
+
+        let history = loadDidScanHistory(
+            from: [firstURL, secondURL],
+            ecu: "01",
+            start: 0x2000,
+            end: 0x20FF
+        )
+
+        XCTAssertEqual(history.completed, Set([0x2012, 0x2014, 0x2025]))
+        XCTAssertEqual(history.positiveHints, Set([0x2012, 0x2025]))
+        XCTAssertFalse(history.completed.contains(0x2026))
+    }
+#endif
+
 }
