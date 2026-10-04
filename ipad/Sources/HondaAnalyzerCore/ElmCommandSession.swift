@@ -12,6 +12,14 @@ public struct ElmCommandResult: Equatable, Sendable {
     public let text: String
     public let latencyMs: Double
     public let success: Bool
+
+    public init(command: String, raw: Data, text: String, latencyMs: Double, success: Bool) {
+        self.command = command
+        self.raw = raw
+        self.text = text
+        self.latencyMs = latencyMs
+        self.success = success
+    }
 }
 
 public enum ElmCommandError: LocalizedError {
