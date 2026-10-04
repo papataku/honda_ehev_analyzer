@@ -66,7 +66,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startRecording() {
-        guard captureStore == nil, !isDidScanning else { return }
+        guard captureStore == nil, !isDidScanning, !isLivePolling, !isBusy else { return }
         do {
             let documents = try FileManager.default.url(
                 for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -100,7 +100,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopRecording() {
-        guard !isDidScanning, let store = captureStore, let sid = captureSessionID else { return }
+        guard !isDidScanning, !isLivePolling, !isBusy,
+              let store = captureStore, let sid = captureSessionID else { return }
         do {
             try store.closeSession(sid)
             store.flush()
