@@ -26,6 +26,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var didPositiveCount = 0
     @Published var didPartialCount = 0
     @Published var positiveDids: [DidProbeOutcome] = []
+    @Published var observedEcus: [EcuResponder] = []
     @Published var recordingFile = ""
     @Published var recordingURL: URL?
     @Published var statusMessage = "KW905へ接続してください"
@@ -158,6 +159,65 @@ final class AnalyzerViewModel: ObservableObject {
         liveTask = nil
         isLivePolling = false
         statusMessage = "ライブ取得停止"
+    }
+
+    func runSafeEcuCensus() {
+        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard stationaryConfirmed else {
+            statusMessage = "ECU確認前に完全停止・Pレンジ確認をチェックしてください"
+            return
+        }
+        guard isRecording else {
+            statusMessage = "ECU確認はRAW証拠を残すためSQLite記録中だけ実行できます"
+            return
+        }
+
+        isBusy = true
+        statusMessage = "停車中の安全なECU確認を実行中"
+
+        Task {
+            do {
+                guard let speed = try await readScanSpeed(), speed <= 0.1 else {
+                    statusMessage = "車速が0 km/hと確認できないためECU確認を中止しました"
+                    isBusy = false
+                    return
+                }
+
+                var found: [String: EcuResponder] = [:]
+                for request in safeEcuCensusRequests {
+                    try await selectHeader(request.headerCommand)
+                    let result = try await session.command(request.command, timeout: 6.0)
+                    append(result)
+                    for responder in ecuResponders(in: result.text) {
+                        found[responder.responseCanID] = responder
+                    }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                }
+
+                observedEcus = found.values.sorted {
+                    (Int($0.source, radix: 16) ?? 0) < (Int($1.source, radix: 16) ?? 0)
+                }
+                if !observedEcus.contains(where: { $0.source == normalizedEcuSource(didScanEcu) }),
+                   let first = observedEcus.first {
+                    didScanEcu = first.source
+                }
+
+                statusMessage = observedEcus.isEmpty
+                    ? "安全な既知要求に応答する18DAF1xx ECU候補は確認できませんでした"
+                    : "応答ECU候補を \(observedEcus.count) 個確認しました。役割名は未確定です"
+            } catch {
+                statusMessage = "ECU確認中止: \(error.localizedDescription)"
+                transcript.append("ECU CENSUS ERROR  \(error)")
+            }
+            isBusy = false
+        }
+    }
+
+    func selectDidEcu(_ source: String) {
+        if let normalized = normalizedEcuSource(source) {
+            didScanEcu = normalized
+            refreshPositiveDids(flush: true)
+        }
     }
 
     func startDidScan2000Range() {
