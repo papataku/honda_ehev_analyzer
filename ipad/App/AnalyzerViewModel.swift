@@ -93,6 +93,7 @@ final class AnalyzerViewModel: ObservableObject {
             // known-signal evidence are present in that SQLite file.
             elmInitialized = false
             knownSignalsValidated = false
+            liveSamples.removeAll()
             statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
         } catch {
