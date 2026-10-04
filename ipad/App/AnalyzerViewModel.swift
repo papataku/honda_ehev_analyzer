@@ -275,6 +275,17 @@ final class AnalyzerViewModel: ObservableObject {
                 var completed = history.completed
                 completed.formUnion(try store.completedDids(ecu: ecu, start: start, end: end))
                 let positiveHints = history.positiveHints
+                let rangeCount = Int(end) - Int(start) + 1
+                let pendingCount = max(0, rangeCount - completed.count)
+
+                if pendingCount == 0 {
+                    didScanProgress = 1.0
+                    didScanCurrent = "指定範囲は確認済み"
+                    statusMessage = "保存済みSQLite履歴により、このDID範囲はすでに確認済みです"
+                    isDidScanning = false
+                    didScanTask = nil
+                    return
+                }
 
                 guard let speed = try await readScanSpeed(), speed <= 0.1 else {
                     didScanCurrent = "安全停止"
@@ -295,8 +306,7 @@ final class AnalyzerViewModel: ObservableObject {
                     }
                 }
 
-                let rangeCount = Int(end) - Int(start) + 1
-                let total = max(1, rangeCount - completed.count)
+                let total = pendingCount
                 var attempted = Set<UInt16>()
                 var consecutiveErrors = 0
                 var nextSpeedCheck = Date()
