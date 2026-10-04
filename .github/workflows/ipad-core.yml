@@ -1,0 +1,27 @@
+name: iPad Core Regression
+
+on:
+  push:
+    branches:
+      - ipad-native
+    paths:
+      - "ipad/**"
+      - ".github/workflows/ipad-core.yml"
+  pull_request:
+    paths:
+      - "ipad/**"
+      - ".github/workflows/ipad-core.yml"
+
+jobs:
+  swift-test:
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ipad
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift toolchain
+        run: swift --version
+      - name: Build and test HondaAnalyzerCore
+        run: swift test
