@@ -269,6 +269,17 @@ struct OperationModeCards: View {
                     .foregroundStyle(.secondary)
 
                 if model.isLivePolling {
+                    Text(
+                        String(
+                            format: "実効 %.1f req/s",
+                            model.liveEffectiveRequestRateHz
+                        )
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+
+                if model.isLivePolling {
                     Button("ライブ取得停止", role: .destructive) {
                         model.stopLivePolling()
                     }
