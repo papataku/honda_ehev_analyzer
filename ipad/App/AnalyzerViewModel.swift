@@ -851,6 +851,9 @@ final class AnalyzerViewModel: ObservableObject {
 
         rpm = rpmValue
         speedKmh = speedValue
+        if let speedValue, speedValue > 0 {
+            stationaryConfirmed = false
+        }
         coolantC = coolantValue
         socPercent = socValue
         if let hybridValue {
