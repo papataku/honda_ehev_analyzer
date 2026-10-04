@@ -192,6 +192,10 @@ private struct BLEConnectionView: View {
                                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel(
+                                    "\(normalizedName(device.name) ?? "名称不明")、RSSI \(device.rssi)、Bluetoothデバイス"
+                                )
+                                .accessibilityHint("ダブルタップして接続します")
                                 .disabled(model.ble.state == "connecting" || model.ble.state == "discovering-gatt")
                             }
                         }
@@ -280,9 +284,7 @@ private struct AnalyzerWorkspace: View {
     let onOpenConnection: () -> Void
 
     private let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible()),
-        GridItem(.flexible())
+        GridItem(.adaptive(minimum: 180, maximum: 320), spacing: 12)
     ]
     private let markers = ["STOP", "EV", "ENGINE ON", "ACCEL", "CRUISE", "REGEN"]
 
@@ -587,5 +589,7 @@ private struct MetricCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) \(value) \(unit)")
     }
 }
