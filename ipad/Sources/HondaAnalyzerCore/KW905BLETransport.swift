@@ -23,7 +23,6 @@ public enum BLETransportError: LocalizedError {
     }
 }
 
-@MainActor
 public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTransport {
     @Published public private(set) var devices: [BLEDevice] = []
     @Published public private(set) var state = "idle"
@@ -74,15 +73,34 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
         func canWrite(_ c: CBCharacteristic) -> Bool { c.properties.contains(.writeWithoutResponse) || c.properties.contains(.write) }
         func canNotify(_ c: CBCharacteristic) -> Bool { c.properties.contains(.notify) || c.properties.contains(.indicate) }
 
-        if let both = pairs.first(where: { canWrite($0.1) && canNotify($0.1) }) {
-            configure(write: both.1, notify: both.1); return
-        }
-        let writes = pairs.filter { canWrite($0.1) }
-        let notifies = pairs.filter { canNotify($0.1) }
-        for w in writes {
-            if let n = notifies.first(where: { $0.0.uuid == w.0.uuid }) {
-                configure(write: w.1, notify: n.1); return
+        let both = pairs
+            .filter { canWrite($0.1) && canNotify($0.1) }
+            .sorted {
+                $0.1.properties.contains(.writeWithoutResponse) &&
+                !$1.1.properties.contains(.writeWithoutResponse)
             }
+        if let selected = both.first {
+            configure(write: selected.1, notify: selected.1)
+            return
+        }
+
+        let writes = pairs
+            .filter { canWrite($0.1) }
+            .sorted {
+                $0.1.properties.contains(.writeWithoutResponse) &&
+                !$1.1.properties.contains(.writeWithoutResponse)
+            }
+        let notifies = pairs.filter { canNotify($0.1) }
+
+        for write in writes {
+            if let notify = notifies.first(where: { $0.0.uuid == write.0.uuid }) {
+                configure(write: write.1, notify: notify.1)
+                return
+            }
+        }
+
+        if let write = writes.first, let notify = notifies.first {
+            configure(write: write.1, notify: notify.1)
         }
     }
 
