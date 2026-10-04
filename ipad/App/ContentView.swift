@@ -124,7 +124,22 @@ private struct BLEConnectionView: View {
             .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 360)
         } detail: {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.accentColor, Color.teal],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 58, height: 58)
+                        Image(systemName: "gauge.with.dots.needle.50percent")
+                            .font(.title2.bold())
+                            .foregroundStyle(.white)
+                    }
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Bluetoothデバイス")
                             .font(.largeTitle.bold())
@@ -522,56 +537,67 @@ private struct AnalyzerWorkspace: View {
                         MetricCard(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW")
                     }
 
-                    GroupBox("Drive markers") {
-                        HStack {
-                            ForEach(markers, id: \.self) { marker in
-                                Button(marker) { model.addMarker(marker) }
-                                    .disabled(!model.isRecording || model.isDidScanning)
+                    if model.isRecording {
+                        GroupBox("Drive markers") {
+                            HStack {
+                                ForEach(markers, id: \.self) { marker in
+                                    Button(marker) { model.addMarker(marker) }
+                                        .disabled(model.isDidScanning)
+                                }
                             }
                         }
                     }
 
-                    GroupBox("Positive DID inventory") {
-                        if model.positiveDids.isEmpty {
-                            Text("まだPositive DIDは保存されていません")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(Array(model.positiveDids.enumerated()), id: \.offset) { _, item in
-                                    HStack {
-                                        Text("ECU \(item.ecu)")
-                                            .frame(width: 70, alignment: .leading)
-                                        Text(String(format: "%04X", item.did))
-                                            .font(.system(.body, design: .monospaced))
-                                            .frame(width: 60, alignment: .leading)
-                                        Text(item.status == .positivePartial ? "部分" : "完全")
-                                            .frame(width: 50, alignment: .leading)
-                                        Text(item.responseCanID ?? "—")
-                                            .font(.system(.caption, design: .monospaced))
-                                        Spacer()
-                                        Text("\(item.payload.count) B")
-                                            .foregroundStyle(.secondary)
+                    if model.isDidScanning || !model.positiveDids.isEmpty {
+                        GroupBox("Positive DID inventory") {
+                            if model.positiveDids.isEmpty {
+                                HStack {
+                                    ProgressView()
+                                    Text("Positive DIDを探索中…")
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(Array(model.positiveDids.enumerated()), id: \.offset) { _, item in
+                                        HStack {
+                                            Text("ECU \(item.ecu)")
+                                                .frame(width: 70, alignment: .leading)
+                                            Text(String(format: "%04X", item.did))
+                                                .font(.system(.body, design: .monospaced))
+                                                .frame(width: 60, alignment: .leading)
+                                            Text(item.status == .positivePartial ? "部分" : "完全")
+                                                .frame(width: 50, alignment: .leading)
+                                            Text(item.responseCanID ?? "—")
+                                                .font(.system(.caption, design: .monospaced))
+                                            Spacer()
+                                            Text("\(item.payload.count) B")
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
 
-                    GroupBox("ELM transcript") {
-                        Text(model.transcript.suffix(40).joined(separator: "\n"))
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    GroupBox("技術ログ") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            DisclosureGroup("ELM transcript") {
+                                Text(model.transcript.suffix(40).joined(separator: "\n"))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
 
-                    GroupBox("GATT") {
-                        VStack(alignment: .leading) {
-                            ForEach(Array(model.ble.gattInventory.enumerated()), id: \.offset) { _, item in
-                                Text("\(item.serviceUUID) / \(item.uuid) / \(item.properties.joined(separator: ", "))")
-                                    .font(.caption)
+                            DisclosureGroup("GATT") {
+                                VStack(alignment: .leading) {
+                                    ForEach(Array(model.ble.gattInventory.enumerated()), id: \.offset) { _, item in
+                                        Text("\(item.serviceUUID) / \(item.uuid) / \(item.properties.joined(separator: ", "))")
+                                            .font(.caption)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding()
