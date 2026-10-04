@@ -781,7 +781,7 @@ private struct SessionFileInfo: Identifiable {
 
 private struct FlowLayout<Content: View>: View {
     let spacing: CGFloat
-    @ViewBuilder let content: Content
+    let content: Content
 
     init(spacing: CGFloat = 8, @ViewBuilder content: () -> Content) {
         self.spacing = spacing
