@@ -521,7 +521,10 @@ private struct SessionsPage: View {
     }
 
     private func reload() {
-        files = SessionFileInfo.load()
+        files = SessionFileInfo.load().filter { file in
+            guard model.isRecording, let active = model.recordingURL else { return true }
+            return file.url != active
+        }
     }
 }
 
