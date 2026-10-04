@@ -121,6 +121,113 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
+    public func saveDidScan(sessionID: Int64, at date: Date, outcome: DidProbeOutcome) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let s = try self.prepare("""
+                INSERT INTO did_scan(session_id,ecu,did,status,latency_ms,nrc,payload,response_can_id,updated_utc)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id,ecu,did) DO UPDATE SET
+                    status=excluded.status,
+                    latency_ms=excluded.latency_ms,
+                    nrc=excluded.nrc,
+                    payload=excluded.payload,
+                    response_can_id=excluded.response_can_id,
+                    updated_utc=excluded.updated_utc
+                """)
+                defer { sqlite3_finalize(s) }
+                sqlite3_bind_int64(s, 1, sessionID)
+                self.bindText(s, 2, outcome.ecu.uppercased())
+                sqlite3_bind_int64(s, 3, Int64(outcome.did))
+                self.bindText(s, 4, outcome.status.rawValue)
+                if let latency = outcome.latencyMs { sqlite3_bind_double(s, 5, latency) }
+                else { sqlite3_bind_null(s, 5) }
+                if let nrc = outcome.nrc { sqlite3_bind_int(s, 6, Int32(nrc)) }
+                else { sqlite3_bind_null(s, 6) }
+                self.bindBlob(s, 7, outcome.payload)
+                self.bindText(s, 8, outcome.responseCanID)
+                self.bindText(s, 9, self.timestamp(date))
+                try self.stepDone(s)
+            } catch { self.report(error) }
+        }
+    }
+
+    public func completedDids(ecu: String, start: UInt16, end: UInt16) throws -> Set<UInt16> {
+        try queue.sync {
+            let s = try prepare("""
+            SELECT DISTINCT did FROM did_scan
+            WHERE ecu=? AND did BETWEEN ? AND ?
+              AND (status IN ('positive','positive_partial') OR (status='nrc' AND nrc=49))
+            """)
+            defer { sqlite3_finalize(s) }
+            bindText(s, 1, ecu.uppercased())
+            sqlite3_bind_int64(s, 2, Int64(start))
+            sqlite3_bind_int64(s, 3, Int64(end))
+            var result = Set<UInt16>()
+            while sqlite3_step(s) == SQLITE_ROW {
+                let raw = sqlite3_column_int64(s, 0)
+                if raw >= 0, raw <= 0xFFFF { result.insert(UInt16(raw)) }
+            }
+            return result
+        }
+    }
+
+    public func positiveDidOutcomes(ecu: String? = nil) throws -> [DidProbeOutcome] {
+        try queue.sync {
+            let sql: String
+            if ecu == nil {
+                sql = """
+                SELECT ecu,did,status,latency_ms,nrc,payload,response_can_id
+                FROM did_scan WHERE status IN ('positive','positive_partial')
+                ORDER BY ecu,did
+                """
+            } else {
+                sql = """
+                SELECT ecu,did,status,latency_ms,nrc,payload,response_can_id
+                FROM did_scan WHERE ecu=? AND status IN ('positive','positive_partial')
+                ORDER BY did
+                """
+            }
+            let s = try prepare(sql)
+            defer { sqlite3_finalize(s) }
+            if let ecu { bindText(s, 1, ecu.uppercased()) }
+            var rows: [DidProbeOutcome] = []
+            while sqlite3_step(s) == SQLITE_ROW {
+                guard let ecuPtr = sqlite3_column_text(s, 0),
+                      let statusPtr = sqlite3_column_text(s, 2),
+                      let status = DidProbeStatus(rawValue: String(cString: statusPtr)) else { continue }
+                let rawDid = sqlite3_column_int64(s, 1)
+                guard rawDid >= 0, rawDid <= 0xFFFF else { continue }
+
+                let latency: Double? = sqlite3_column_type(s, 3) == SQLITE_NULL
+                    ? nil : sqlite3_column_double(s, 3)
+                let nrc: UInt8? = sqlite3_column_type(s, 4) == SQLITE_NULL
+                    ? nil : UInt8(clamping: Int(sqlite3_column_int(s, 4)))
+
+                let count = Int(sqlite3_column_bytes(s, 5))
+                let payload: Data
+                if count > 0, let ptr = sqlite3_column_blob(s, 5) {
+                    payload = Data(bytes: ptr, count: count)
+                } else {
+                    payload = Data()
+                }
+
+                let responseID = sqlite3_column_text(s, 6).map { String(cString: $0) }
+                rows.append(DidProbeOutcome(
+                    ecu: String(cString: ecuPtr),
+                    did: UInt16(rawDid),
+                    status: status,
+                    latencyMs: latency,
+                    nrc: nrc,
+                    payload: payload,
+                    responseCanID: responseID
+                ))
+            }
+            return rows
+        }
+    }
+
     public func closeSession(_ sessionID: Int64, status: String = "CLOSED") throws {
         try queue.sync {
             let s = try prepare("UPDATE sessions SET ended_utc=?,status=? WHERE id=?")
