@@ -171,4 +171,49 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(physicalRequestHeaderCommand(for: "01"), "ATSHDA01F1")
     }
 
+#if canImport(SQLite3)
+    func testCaptureStorePersistsTerminalDidResumeState() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("honda-ipad-test-\(UUID().uuidString).sqlite3")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + "-wal"))
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + "-shm"))
+        }
+
+        let store = try CaptureStore(url: url)
+        let sid = try store.createSession()
+        store.saveDidScan(
+            sessionID: sid,
+            at: Date(),
+            outcome: DidProbeOutcome(
+                ecu: "01", did: 0x2019, status: .positivePartial,
+                latencyMs: 170, payload: Data([1, 2, 3]), responseCanID: "18DAF101"
+            )
+        )
+        store.saveDidScan(
+            sessionID: sid,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2020, status: .nrc, nrc: 0x31)
+        )
+        store.saveDidScan(
+            sessionID: sid,
+            at: Date(),
+            outcome: DidProbeOutcome(ecu: "01", did: 0x2021, status: .noData)
+        )
+        store.flush()
+
+        let completed = try store.completedDids(ecu: "01", start: 0x2000, end: 0x20FF)
+        XCTAssertTrue(completed.contains(0x2019))
+        XCTAssertTrue(completed.contains(0x2020))
+        XCTAssertFalse(completed.contains(0x2021))
+
+        let positives = try store.positiveDidOutcomes(ecu: "01")
+        XCTAssertEqual(positives.count, 1)
+        XCTAssertEqual(positives[0].did, 0x2019)
+        XCTAssertEqual(positives[0].status, .positivePartial)
+        XCTAssertEqual(positives[0].payload, Data([1, 2, 3]))
+    }
+#endif
+
 }
