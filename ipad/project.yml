@@ -16,6 +16,11 @@ targets:
         product: HondaAnalyzerCore
     preBuildScripts:
       - name: Generate App Icon
+        inputFiles:
+          - $(SRCROOT)/Tools/GenerateAppIcon.swift
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/Contents.json
+        outputFiles:
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
         script: |
           xcrun swift "$SRCROOT/Tools/GenerateAppIcon.swift" "$SRCROOT/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
     settings:
