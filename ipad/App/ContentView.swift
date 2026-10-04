@@ -64,6 +64,37 @@ struct ContentView: View {
                 Section("DID探索（停車のみ）") {
                     Toggle("完全停止・Pレンジを確認", isOn: $model.stationaryConfirmed)
 
+                    Button("既知の安全な要求でECU候補を確認") {
+                        model.runSafeEcuCensus()
+                    }
+                    .disabled(
+                        model.ble.state != "ready" ||
+                        !model.isRecording ||
+                        !model.stationaryConfirmed ||
+                        model.isBusy ||
+                        model.isLivePolling ||
+                        model.isDidScanning
+                    )
+
+                    if !model.observedEcus.isEmpty {
+                        ForEach(model.observedEcus) { ecu in
+                            Button {
+                                model.selectDidEcu(ecu.source)
+                            } label: {
+                                HStack {
+                                    Text("ECU source \(ecu.source)")
+                                    Spacer()
+                                    Text(ecu.responseCanID)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        Text("ECU名/役割は未確定です")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
                     HStack {
                         Text("ECU source")
                         TextField("01", text: $model.didScanEcu)
