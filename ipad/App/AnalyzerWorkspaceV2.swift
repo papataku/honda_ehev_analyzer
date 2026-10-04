@@ -2,7 +2,7 @@ import SwiftUI
 import Charts
 import HondaAnalyzerCore
 
-enum AnalyzerSection: String, CaseIterable, Identifiable {
+enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case discovery
     case sessions
