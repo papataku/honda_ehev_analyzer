@@ -272,4 +272,26 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(cut.responseCanID, "18DAF101")
     }
 
+    func testEcuResponderCensusExtractsUniquePhysicalResponders() {
+        let text = """
+        18DAF10103410D2A
+        18DAF10104410C1F40
+        18DAF10E03410550
+        18DB33F103410D2A
+        >
+        """
+        let responders = ecuResponders(in: text)
+        XCTAssertEqual(responders.map(\.source), ["01", "0E"])
+        XCTAssertEqual(responders.map(\.responseCanID), ["18DAF101", "18DAF10E"])
+        XCTAssertEqual(responseEcuSource(from: "18DAF1EF"), "EF")
+        XCTAssertNil(responseEcuSource(from: "18DB33F1"))
+    }
+
+    func testSafeEcuCensusRequestListIsReadOnlyOnly() {
+        XCTAssertFalse(safeEcuCensusRequests.isEmpty)
+        for item in safeEcuCensusRequests {
+            XCTAssertTrue(isReadOnlyVehicleCommand(item.command))
+        }
+    }
+
 }
