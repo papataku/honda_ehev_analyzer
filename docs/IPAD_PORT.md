@@ -43,7 +43,10 @@ The Python/macOS implementation remains the reference implementation. The iPad a
 - Resume semantics matching macOS: positive / positive_partial / NRC 0x31 are terminal; NO DATA / timeout remain retryable.
 - Fractional ISO-8601 timestamps for subsecond replay/correlation ordering.
 - RAW BLE layer/source metadata aligned with macOS conventions.
-- Speed is re-read during discovery. Unknown speed or speed above 0.1 km/h stops discovery.
+- Speed is re-read during discovery. Unknown speed or speed above 0.1 km/h pauses DID traffic immediately.
+- While speed-paused, only OBD `010D` is polled; no UDS DID request is transmitted.
+- With auto-resume enabled, discovery resumes at the same logical position after 0 km/h is confirmed three consecutive times.
+- Pause/resume transitions are saved in SQLite events as `DID_SCAN_PAUSE_SPEED` / `DID_SCAN_RESUME_STATIONARY`.
 - Five consecutive communication errors stop discovery rather than continuing a bad header/link state.
 
 ## Safety invariants
@@ -54,7 +57,8 @@ The Python/macOS implementation remains the reference implementation. The iPad a
   1. an active SQLite recording session,
   2. explicit user confirmation of complete stop / P range,
   3. a successful live `010D` reading of zero speed.
-- Vehicle speed is rechecked at least every two seconds during the current discovery workflow.
+- Vehicle speed is rechecked at least every two seconds during active discovery.
+- If motion is detected, UDS discovery traffic pauses. During the pause, only `010D` is read approximately once per second until stable zero-speed is proven.
 - Live driving polling and DID discovery are mutually exclusive.
 - Raw evidence is saved before later semantic promotion.
 - ECU source IDs are not assigned human-readable ECU roles without evidence.
