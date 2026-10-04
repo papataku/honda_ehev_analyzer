@@ -27,6 +27,10 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     @Published public private(set) var devices: [BLEDevice] = []
     @Published public private(set) var state = "idle"
     @Published public private(set) var gattInventory: [GattCharacteristicInfo] = []
+    @Published public private(set) var connectedDeviceID: UUID?
+    @Published public private(set) var connectedDeviceName: String?
+    @Published public private(set) var selectedWriteUUID: String?
+    @Published public private(set) var selectedNotifyUUID: String?
     public var onReceive: ((Data) -> Void)?
 
     private var central: CBCentralManager!
@@ -106,8 +110,14 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
 
     private func configure(write: CBCharacteristic, notify: CBCharacteristic) {
         guard writeCharacteristic == nil, let peripheral else { return }
-        writeCharacteristic = write; notifyCharacteristic = notify
-        peripheral.setNotifyValue(true, for: notify); state = "ready"
+        writeCharacteristic = write
+        notifyCharacteristic = notify
+        selectedWriteUUID = write.uuid.uuidString
+        selectedNotifyUUID = notify.uuid.uuidString
+        connectedDeviceID = peripheral.identifier
+        connectedDeviceName = peripheral.name
+        peripheral.setNotifyValue(true, for: notify)
+        state = "ready"
     }
     private func propertyNames(_ p: CBCharacteristicProperties) -> [String] {
         var r: [String] = []
@@ -142,7 +152,13 @@ extension KW905BLETransport: CBCentralManagerDelegate {
         state = "connect-failed"
     }
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        writeCharacteristic = nil; notifyCharacteristic = nil; state = "disconnected"
+        writeCharacteristic = nil
+        notifyCharacteristic = nil
+        selectedWriteUUID = nil
+        selectedNotifyUUID = nil
+        connectedDeviceID = nil
+        connectedDeviceName = nil
+        state = "disconnected"
     }
 }
 
