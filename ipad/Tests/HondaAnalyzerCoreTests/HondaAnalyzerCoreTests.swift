@@ -238,4 +238,38 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         }
     }
 
+    func testSession15StyleLongDidIsPositivePartial() {
+        let text =
+            "18DAF10110F6622019FFFFFF\r" +
+            "18DAF10121FFFFFFFFFFFFFF\r" +
+            "18DAF10122FFFFFFFFFFFFFF\r" +
+            "18DAF10123FF000000000000\r" +
+            "18DAF1012400000003CF03CD\r" +
+            "18DAF1012503CE03CB03C903\r" +
+            "18DAF10126CB03CB03CE03CA\r" +
+            "18DAF1012703CD03C903D003\r" +
+            "18DAF10128C803CD03CA03CA\r" +
+            "18DAF1012903CB03ED03D203\r" +
+            "18DAF1012AED03C803CD03CE\r" +
+            "BUFFER FULL\r\r>"
+        let outcome = classifyUDS22Text(text, ecu: "01", did: 0x2019, latencyMs: 170)
+        XCTAssertEqual(outcome.status, .positivePartial)
+        XCTAssertEqual(outcome.responseCanID, "18DAF101")
+        XCTAssertGreaterThan(outcome.payload.count, 50)
+    }
+
+    func testHeaderlessCAF1CompleteAndPartialDidResponses() {
+        let complete = "00A\r0: 62 20 19 01 02 03\r1: 04 05 06 07\r\r>"
+        let full = classifyUDS22Text(complete, ecu: "01", did: 0x2019)
+        XCTAssertEqual(full.status, .positive)
+        XCTAssertEqual(full.payload, Data([1, 2, 3, 4, 5, 6, 7]))
+        XCTAssertEqual(full.responseCanID, "18DAF101")
+
+        let partial = "00A\r0:622019010203\rBUFFER FULL\r>"
+        let cut = classifyUDS22Text(partial, ecu: "01", did: 0x2019)
+        XCTAssertEqual(cut.status, .positivePartial)
+        XCTAssertEqual(cut.payload, Data([1, 2, 3]))
+        XCTAssertEqual(cut.responseCanID, "18DAF101")
+    }
+
 }
