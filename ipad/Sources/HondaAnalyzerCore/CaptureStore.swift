@@ -4,6 +4,12 @@ import SQLite3
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+public func captureTimestamp(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+}
+
 public enum CaptureStoreError: LocalizedError {
     case sqlite(String)
     public var errorDescription: String? {
@@ -321,7 +327,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private func timestamp(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
+    private func timestamp(_ date: Date) -> String { captureTimestamp(date) }
 
     private func report(_ error: Error) {
         guard let onError else { return }
