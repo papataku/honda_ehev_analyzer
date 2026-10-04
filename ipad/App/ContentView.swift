@@ -386,14 +386,6 @@ private struct AnalyzerWorkspace: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack {
-                        Text("ECU source")
-                        TextField("01", text: $model.didScanEcu)
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .multilineTextAlignment(.trailing)
-                    }
-
                     DisclosureGroup("探索設定") {
                         Picker("探索速度", selection: $model.didScanRateHz) {
                             Text("2 req/s").tag(2.0)
@@ -410,6 +402,19 @@ private struct AnalyzerWorkspace: View {
                         Text("走行中は010Dだけ監視し、DID要求は送信しません。0 km/hを3回連続確認してから再開します。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+
+                        DisclosureGroup("高度な設定：ECU source手入力") {
+                            HStack {
+                                Text("ECU source")
+                                TextField("01", text: $model.didScanEcu)
+                                    .textInputAutocapitalization(.characters)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                            }
+                            Text("通常はECU候補確認で観測された項目を選択してください。未観測sourceでは探索を開始できません。")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Text("短時間確認: 2000–20FF / 全範囲: adaptive 0000–FFFF")
@@ -442,6 +447,8 @@ private struct AnalyzerWorkspace: View {
                             model.ble.state != "ready" ||
                             !model.isRecording ||
                             !model.stationaryConfirmed ||
+                            !model.elmInitialized ||
+                            !model.knownSignalsValidated ||
                             model.observedEcus.isEmpty ||
                             model.isBusy ||
                             model.isLivePolling
