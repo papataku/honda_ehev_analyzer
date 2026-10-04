@@ -337,9 +337,11 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(didOutcomeInterestScore(status: .positivePartial, nrc: nil), 100)
         XCTAssertEqual(didOutcomeInterestScore(status: .nrc, nrc: 0x22), 25)
         XCTAssertEqual(didOutcomeInterestScore(status: .nrc, nrc: 0x31), 0)
-        XCTAssertEqual(didEstimatedScanSeconds(
+        let estimate = didEstimatedScanSeconds(
             ecuCount: 1, start: 0x0000, end: 0xFFFF, rateHz: 10
-        ), 6553.6, accuracy: 0.001)
+        )
+        XCTAssertNotNil(estimate)
+        XCTAssertEqual(estimate ?? 0, 6553.6, accuracy: 0.001)
     }
 
 #if canImport(SQLite3)
