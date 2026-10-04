@@ -73,3 +73,22 @@ Writes use a dedicated serial queue so UI rendering is not used as the storage e
 Known signals can now be polled continuously with one serialized pass per cycle and a one-second inter-cycle delay.
 The live cycle reads 010C/010D/0105/015B/019A only.
 Completed SQLite sessions can be exported through the iPad share sheet, and the app Documents directory is exposed to Files.
+
+
+## Adaptive full-range DID discovery
+
+After the first physical-iPad gate passed, the iPad app gained the same priority model used by the macOS analyzer:
+
+1. `2000–20FF` first
+2. the first few DIDs of each 0x1000 sector
+3. first/midpoint sentinels of every 0x100 page
+4. fully scan pages that produced Positive/partial or another interesting NRC
+5. exhaustively fill every remaining DID
+
+This changes order only; it does not skip silent regions.
+
+The full-range button requires the long-scan acknowledgement and the same stationary/P-range + live `010D == 0` safety gate. Speed continues to be rechecked while scanning.
+
+Resume now reads terminal DID results from all `.sqlite3` capture files still present in the iPad `HondaAnalyzerSessions` folder. This allows a long scan to be stopped, a new recording created later, and already proven Positive/positive_partial/NRC-0x31 DIDs to be skipped.
+
+The first physical log also showed that second-only timestamps were insufficient for replay/correlation. New captures use fractional ISO-8601 timestamps, and RAW BLE rows use the same `BLE` / `ble:<notify UUID>` metadata convention as macOS.
