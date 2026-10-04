@@ -10,7 +10,7 @@ enum AnalyzerDesign {
 struct AnalyzerCard<Content: View>: View {
     let title: String?
     let systemImage: String?
-    @ViewBuilder var content: Content
+    let content: Content
 
     init(
         _ title: String? = nil,
