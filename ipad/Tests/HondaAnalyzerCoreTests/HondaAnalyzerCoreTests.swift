@@ -403,6 +403,78 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertNotNil(ISO8601DateFormatter.fractional.date(from: text))
     }
 
+
+    func testHighRatePollingDelayCanRunAt20To100HzOrUnthrottled() {
+        XCTAssertEqual(
+            pollingDelaySeconds(
+                requestCount: 1,
+                targetRequestRateHz: 20,
+                elapsedSeconds: 0.010
+            ),
+            0.040,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            pollingDelaySeconds(
+                requestCount: 5,
+                targetRequestRateHz: 50,
+                elapsedSeconds: 0.070
+            ),
+            0.030,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            pollingDelaySeconds(
+                requestCount: 1,
+                targetRequestRateHz: 100,
+                elapsedSeconds: 0.020
+            ),
+            0,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            pollingDelaySeconds(
+                requestCount: 1,
+                targetRequestRateHz: 100,
+                elapsedSeconds: 0,
+                unthrottled: true
+            ),
+            0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testAggressiveCustomAdapterTimingIsExplicitOptIn() {
+        let compatible = elmDidPollingTimingProfile(
+            targetRateHz: 50,
+            unthrottled: false,
+            aggressive: false
+        )
+        XCTAssertEqual(compatible.setup, ["ATAT2", "ATST0F"])
+
+        let fast20 = elmDidPollingTimingProfile(
+            targetRateHz: 20,
+            unthrottled: false,
+            aggressive: true
+        )
+        XCTAssertEqual(fast20.setup, ["ATAT2", "ATST0A"])
+
+        let fast50 = elmDidPollingTimingProfile(
+            targetRateHz: 50,
+            unthrottled: false,
+            aggressive: true
+        )
+        XCTAssertEqual(fast50.setup, ["ATAT2", "ATST04"])
+
+        let maxRate = elmDidPollingTimingProfile(
+            targetRateHz: 100,
+            unthrottled: true,
+            aggressive: true
+        )
+        XCTAssertEqual(maxRate.setup, ["ATAT2", "ATST02"])
+        XCTAssertEqual(maxRate.restore, ["ATAT1", "ATST32"])
+    }
+
 }
 
 private extension ISO8601DateFormatter {
