@@ -12,33 +12,35 @@ on:
       - "ipad/**"
       - ".github/workflows/ipad-core.yml"
 
+concurrency:
+  group: ipad-regression-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
-  swift-test:
+  regression:
     runs-on: macos-15
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: ipad
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - name: Swift toolchain
+        working-directory: ipad
         run: swift --version
+
       - name: Build and test HondaAnalyzerCore
+        working-directory: ipad
         run: swift test
 
-  ipad-app-build:
-    runs-on: macos-15
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then
             brew install xcodegen
           fi
+
       - name: Generate Xcode project
         working-directory: ipad
         run: xcodegen generate
+
       - name: Build iPad app
         working-directory: ipad
         run: |
