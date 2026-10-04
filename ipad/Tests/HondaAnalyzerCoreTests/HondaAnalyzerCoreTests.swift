@@ -411,4 +411,28 @@ private extension ISO8601DateFormatter {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }
+    func testStationaryResumeTrackerRequiresStableZeroAndResetsOnMotionOrUnknown() {
+        var tracker = StationaryResumeTracker(requiredZeroSamples: 3)
+
+        XCTAssertFalse(tracker.observe(speedKmh: 12))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 0)
+
+        XCTAssertFalse(tracker.observe(speedKmh: 0))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 1)
+
+        XCTAssertFalse(tracker.observe(speedKmh: 0))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 2)
+
+        XCTAssertFalse(tracker.observe(speedKmh: nil))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 0)
+
+        XCTAssertFalse(tracker.observe(speedKmh: 0))
+        XCTAssertFalse(tracker.observe(speedKmh: 0))
+        XCTAssertTrue(tracker.observe(speedKmh: 0))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 3)
+
+        XCTAssertFalse(tracker.observe(speedKmh: 1))
+        XCTAssertEqual(tracker.consecutiveZeroSamples, 0)
+    }
+
 }
