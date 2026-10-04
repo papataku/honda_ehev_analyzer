@@ -120,3 +120,28 @@ The iPad app now starts with a dedicated BLE connection screen instead of placin
 - An optional name search field further narrows the list.
 - When the selected device reaches BLE `ready`, the app automatically opens the analyzer workspace.
 - The analyzer sidebar keeps only the current connection summary and a button to return to the Bluetooth connection screen; discovered-device rows no longer expand that sidebar.
+
+
+## Guided analyzer workflow
+
+The analyzer workspace now leads first-time operators through the intended evidence-first order:
+
+1. connect KW905 over BLE,
+2. start SQLite recording,
+3. initialize vehicle/ELM communication,
+4. validate known standard signals,
+5. while stationary, run the safe ECU census,
+6. select an observed ECU,
+7. start either the short 2000–20FF scan or the confirmed full adaptive scan.
+
+The next recommended action is shown prominently. Technical/manual controls remain available under disclosure sections for experienced users.
+
+DID discovery is now hard-gated by the same prerequisites in code, not just by UI wording. Full-range 0000–FFFF discovery uses an explicit confirmation dialog rather than a persistent acknowledgement toggle.
+
+The dashboard metric grid is adaptive for iPad split-view/portrait widths, and key device/metric rows include accessibility labels.
+
+## App icon
+
+The Xcode project generates a dedicated Honda Analyzer app icon before the asset-catalog build. The design is intentionally brand-neutral: a vehicle gauge, an analysis waveform, and a wireless/diagnostic signal motif. It does not reuse the Honda logo.
+
+The generated asset is declared as the build-script output so the same icon is produced in CI and local Xcode builds.
