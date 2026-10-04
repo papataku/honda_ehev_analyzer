@@ -38,7 +38,11 @@ The Python/macOS implementation remains the reference implementation. The iPad a
   - preserve the longer partial if still truncated
   - restore `ATH1`
 - Initial stationary discovery workflow for ECU source + DID `2000–20FF`.
+- Adaptive full-range `0000–FFFF` ordering matching macOS: known 2000 page, sector heads, page sentinels, hot-page deep scan, exhaustive fill.
+- Cross-capture-file resume using prior iPad SQLite evidence still present on the device.
 - Resume semantics matching macOS: positive / positive_partial / NRC 0x31 are terminal; NO DATA / timeout remain retryable.
+- Fractional ISO-8601 timestamps for subsecond replay/correlation ordering.
+- RAW BLE layer/source metadata aligned with macOS conventions.
 - Speed is re-read during discovery. Unknown speed or speed above 0.1 km/h stops discovery.
 - Five consecutive communication errors stop discovery rather than continuing a bad header/link state.
 
@@ -345,7 +349,7 @@ Verified from the capture:
 
 The uploaded raw vehicle database is not committed to the public repository. Only this validation summary is retained.
 
-This closes the initial physical-iPad gate. The next iPad implementation step is parity with the macOS adaptive full-range DID ordering while preserving the same stationary/read-only safety rules.
+This closes the initial physical-iPad gate. Adaptive full-range ordering and cross-capture-file resume have now been added while preserving the same stationary/read-only safety rules. The next hardware gate is a short physical run of the new adaptive workflow before committing to a multi-hour full-range scan.
 
 ## Regression gates
 
@@ -359,9 +363,8 @@ Cross-platform regression fixtures cover ELM framing, CAN/ISO-TP, known OBD deco
 
 ## Next work
 
-1. Validate the direct BLE path on a physical iPad/KW905.
-2. Add active/passive ECU census UI.
-3. Port the macOS adaptive full-range discovery order after the 2000–20FF hardware gate.
-4. Add offline replay and Debug Bundle export.
-5. Add drive sweep and candidate analysis.
-6. Keep heavy correlation workloads on macOS until an iPad-native implementation provides a clear benefit.
+1. Rebuild/install the latest `ipad-native` app and perform a short physical validation of adaptive full-range ordering/resume.
+2. Confirm a second capture skips the terminal DIDs already proven by the first iPad SQLite file.
+3. Add offline replay and Debug Bundle export.
+4. Add drive sweep and candidate analysis.
+5. Keep heavy correlation workloads on macOS until an iPad-native implementation provides a clear benefit.
