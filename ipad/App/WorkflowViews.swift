@@ -19,34 +19,17 @@ struct SessionWorkflowPanel: View {
                         .font(.subheadline.weight(.semibold))
                 }
 
-                HStack(spacing: 10) {
-                    WorkflowStep(
-                        number: 1,
-                        title: "BLE",
-                        subtitle: model.ble.connectedDeviceName ?? "KW905接続",
-                        complete: model.ble.state == "ready"
-                    )
-                    WorkflowConnector(complete: model.ble.state == "ready")
-                    WorkflowStep(
-                        number: 2,
-                        title: "記録",
-                        subtitle: "SQLite",
-                        complete: model.isRecording
-                    )
-                    WorkflowConnector(complete: model.isRecording)
-                    WorkflowStep(
-                        number: 3,
-                        title: "通信",
-                        subtitle: "ELM初期化",
-                        complete: model.elmInitialized
-                    )
-                    WorkflowConnector(complete: model.elmInitialized)
-                    WorkflowStep(
-                        number: 4,
-                        title: "確認",
-                        subtitle: "既知信号",
-                        complete: model.knownSignalsValidated
-                    )
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        workflowStepViews
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        WorkflowStepRow(number: 1, title: "BLE", subtitle: model.ble.connectedDeviceName ?? "KW905接続", complete: model.ble.state == "ready")
+                        WorkflowStepRow(number: 2, title: "記録", subtitle: "SQLite", complete: model.isRecording)
+                        WorkflowStepRow(number: 3, title: "通信", subtitle: "ELM初期化", complete: model.elmInitialized)
+                        WorkflowStepRow(number: 4, title: "確認", subtitle: "既知信号", complete: model.knownSignalsValidated)
+                    }
                 }
 
                 Divider()
@@ -81,6 +64,37 @@ struct SessionWorkflowPanel: View {
             }
             .padding(6)
         }
+    }
+
+    @ViewBuilder
+    private var workflowStepViews: some View {
+        WorkflowStep(
+            number: 1,
+            title: "BLE",
+            subtitle: model.ble.connectedDeviceName ?? "KW905接続",
+            complete: model.ble.state == "ready"
+        )
+        WorkflowConnector(complete: model.ble.state == "ready")
+        WorkflowStep(
+            number: 2,
+            title: "記録",
+            subtitle: "SQLite",
+            complete: model.isRecording
+        )
+        WorkflowConnector(complete: model.isRecording)
+        WorkflowStep(
+            number: 3,
+            title: "通信",
+            subtitle: "ELM初期化",
+            complete: model.elmInitialized
+        )
+        WorkflowConnector(complete: model.elmInitialized)
+        WorkflowStep(
+            number: 4,
+            title: "確認",
+            subtitle: "既知信号",
+            complete: model.knownSignalsValidated
+        )
     }
 
     private var readinessLabel: String {
@@ -181,6 +195,41 @@ private struct WorkflowStep: View {
     }
 }
 
+private struct WorkflowStepRow: View {
+    let number: Int
+    let title: String
+    let subtitle: String
+    let complete: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(complete ? Color.accentColor : Color.secondary.opacity(0.14))
+                    .frame(width: 30, height: 30)
+                if complete {
+                    Image(systemName: "checkmark")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                } else {
+                    Text("\(number)")
+                        .font(.caption.bold())
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+}
+
 private struct WorkflowConnector: View {
     let complete: Bool
 
@@ -197,52 +246,66 @@ struct OperationModeCards: View {
     @ObservedObject var model: AnalyzerViewModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("走行中：ライブ監視", systemImage: "gauge.with.dots.needle.50percent")
-                        .font(.headline)
-                    Text("既知の標準信号だけを継続取得します。未知DID探索は行いません。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if model.isLivePolling {
-                        Button("ライブ取得停止", role: .destructive) {
-                            model.stopLivePolling()
-                        }
-                        .buttonStyle(.bordered)
-                    } else {
-                        Button("ライブ取得開始") {
-                            model.startLivePolling()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(
-                            model.ble.state != "ready" ||
-                            !model.elmInitialized ||
-                            model.isBusy ||
-                            model.isDidScanning
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                liveCard
+                discoveryCard
             }
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("停車中：DID探索", systemImage: "magnifyingglass.circle")
-                        .font(.headline)
-                    Text("Pレンジ・0 km/h確認後だけ、read-only UDS 0x22探索を実行します。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        Image(systemName: model.stationaryConfirmed ? "checkmark.shield.fill" : "shield")
-                        Text(model.stationaryConfirmed ? "停車確認済み" : "左ペインで停車確認が必要")
-                            .font(.caption)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 12) {
+                liveCard
+                discoveryCard
             }
+        }
+    }
+
+    private var liveCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("走行中：ライブ監視", systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.headline)
+                Text("既知の標準信号だけを継続取得します。未知DID探索は行いません。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if model.isLivePolling {
+                    Button("ライブ取得停止", role: .destructive) {
+                        model.stopLivePolling()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("ライブ取得開始") {
+                        model.startLivePolling()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        model.ble.state != "ready" ||
+                        !model.elmInitialized ||
+                        model.isBusy ||
+                        model.isDidScanning
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var discoveryCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("停車中：DID探索", systemImage: "magnifyingglass.circle")
+                    .font(.headline)
+                Text("Pレンジ・0 km/h確認後だけ、read-only UDS 0x22探索を実行します。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Image(systemName: model.stationaryConfirmed ? "checkmark.shield.fill" : "shield")
+                    Text(model.stationaryConfirmed ? "停車確認済み" : "DID探索ページで停車確認が必要")
+                        .font(.caption)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
