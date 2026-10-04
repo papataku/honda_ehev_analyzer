@@ -687,6 +687,9 @@ final class AnalyzerViewModel: ObservableObject {
         append(result)
         guard result.success, let value = decodeVehicleSpeed(result.text) else { return nil }
         speedKmh = value
+        if value > 0 {
+            stationaryConfirmed = false
+        }
         return Double(value)
     }
 
