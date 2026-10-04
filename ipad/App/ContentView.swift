@@ -225,6 +225,24 @@ private struct BLEConnectionView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                 }
+
+                if let recovery = recoveryMessage {
+                    AnalyzerCard("接続できませんでした", systemImage: "exclamationmark.triangle") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(recovery)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                model.ble.disconnect()
+                                toggleScan()
+                            } label: {
+                                Label("再スキャン", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                }
             }
             .padding(22)
         }
@@ -237,6 +255,19 @@ private struct BLEConnectionView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var recoveryMessage: String? {
+        switch model.ble.state {
+        case "connect-failed":
+            return "接続に失敗しました。KW905が他のスマートフォンやCar Scannerへ接続中でないか確認して、再スキャンしてください。"
+        case "gatt-error":
+            return "GATT情報の取得に失敗しました。アダプタの電源を入れ直してから再スキャンしてください。"
+        case "bluetooth-unavailable":
+            return "iPadのBluetoothが利用できません。BluetoothをONにし、Honda AnalyzerのBluetooth権限を確認してください。"
+        default:
+            return nil
         }
     }
 
