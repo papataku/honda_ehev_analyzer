@@ -521,6 +521,10 @@ private struct SessionsPage: View {
             .frame(maxWidth: .infinity)
         }
         .task { reload() }
+        .refreshable { reload() }
+        .onChange(of: model.isRecording) { _, _ in
+            reload()
+        }
     }
 
     private func reload() {
@@ -672,7 +676,7 @@ private struct DashboardMetric: View {
                         .foregroundStyle(.secondary)
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(value)
-                            .font(.system(size: 34, weight: .semibold, design: .rounded))
+                            .font(.system(.title, design: .rounded).weight(.semibold))
                             .monospacedDigit()
                         Text(unit)
                             .font(.caption)
