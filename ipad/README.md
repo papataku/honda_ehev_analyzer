@@ -92,3 +92,19 @@ The full-range button requires the long-scan acknowledgement and the same statio
 Resume now reads terminal DID results from all `.sqlite3` capture files still present in the iPad `HondaAnalyzerSessions` folder. This allows a long scan to be stopped, a new recording created later, and already proven Positive/positive_partial/NRC-0x31 DIDs to be skipped.
 
 The first physical log also showed that second-only timestamps were insufficient for replay/correlation. New captures use fractional ISO-8601 timestamps, and RAW BLE rows use the same `BLE` / `ble:<notify UUID>` metadata convention as macOS.
+
+
+## Motion pause and automatic stationary resume
+
+DID discovery no longer has to terminate permanently when vehicle speed becomes non-zero.
+
+With **走行検出時は一時停止し、0 km/h安定後に自動再開** enabled:
+
+- active DID traffic stops immediately when `010D` is unknown or above 0.1 km/h,
+- while moving/unknown, the scanner sends only `010D` approximately once per second,
+- no `0x22` DID request is sent while speed-paused,
+- three consecutive zero-speed samples are required before the same scan resumes,
+- the pending DID is not marked complete simply because motion occurred,
+- pause/resume is recorded in SQLite events.
+
+Turning the option off preserves the conservative behavior: motion ends the current scan and a later scan must be started manually.
