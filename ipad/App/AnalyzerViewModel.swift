@@ -17,6 +17,8 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var isBusy = false
     @Published var isLivePolling = false
     @Published var isDidScanning = false
+    @Published var isDidScanPausedForSpeed = false
+    @Published var autoResumeDidScanAfterStop = true
     @Published var isRecording = false
     @Published var stationaryConfirmed = false
     @Published var longDidScanAcknowledged = false
@@ -335,18 +337,18 @@ final class AnalyzerViewModel: ObservableObject {
 
                     if Date() >= nextSpeedCheck {
                         let speed = try await readScanSpeed()
-                        guard let speed, speed <= 0.1 else {
-                            let stopped = DidProbeOutcome(
+                        if speed == nil || (speed ?? 0) > 0.1 {
+                            let resumed = try await waitForStationaryResume(
+                                store: store,
+                                sessionID: sid,
                                 ecu: ecu,
                                 did: did,
-                                status: .stoppedSpeed,
-                                rawText: speed.map { "vehicle speed \($0) km/h" } ?? "vehicle speed unavailable"
+                                initialSpeedKmh: speed
                             )
-                            store.saveDidScan(sessionID: sid, at: Date(), outcome: stopped)
-                            didScanCurrent = "安全停止 DID \(String(format: "%04X", did))"
-                            statusMessage = "車速が0 km/hと確認できなくなったためDID探索を停止しました"
-                            aborted = true
-                            return
+                            if !resumed {
+                                aborted = true
+                                return
+                            }
                         }
                         nextSpeedCheck = Date().addingTimeInterval(2.0)
                     }
@@ -513,6 +515,7 @@ final class AnalyzerViewModel: ObservableObject {
             activeHeaderCommand = nil
             store.flush()
             refreshPositiveDids()
+            isDidScanPausedForSpeed = false
             isDidScanning = false
             didScanTask = nil
         }
@@ -549,6 +552,75 @@ final class AnalyzerViewModel: ObservableObject {
         didScanTask?.cancel()
         didScanCurrent = "停止要求済み"
         statusMessage = "現在の要求が終わったところでDID探索を停止します"
+    }
+
+    private func waitForStationaryResume(
+        store: CaptureStore,
+        sessionID: Int64,
+        ecu: String,
+        did: UInt16,
+        initialSpeedKmh: Double?
+    ) async throws -> Bool {
+        let reason = initialSpeedKmh.map { String(format: "vehicle speed %.1f km/h", $0) }
+            ?? "vehicle speed unavailable"
+
+        store.addEvent(
+            sessionID: sessionID,
+            at: Date(),
+            kind: "DID_SCAN_PAUSE_SPEED",
+            note: "ECU \(ecu) DID \(String(format: "%04X", did)): \(reason)"
+        )
+
+        isDidScanPausedForSpeed = true
+        didScanCurrent = "一時停止 DID \(String(format: "%04X", did))"
+
+        if !autoResumeDidScanAfterStop {
+            statusMessage = "車速を検出したためDID探索を停止しました"
+            isDidScanPausedForSpeed = false
+            return false
+        }
+
+        var tracker = StationaryResumeTracker(requiredZeroSamples: 3)
+
+        while !didScanStopRequested && !Task.isCancelled {
+            let speed: Double?
+            do {
+                speed = try await readScanSpeed()
+            } catch {
+                tracker.reset()
+                statusMessage = "DID探索一時停止中：車速確認失敗。0 km/h安定待ち"
+                transcript.append("DID PAUSE SPEED CHECK ERROR  \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+
+            if tracker.observe(speedKmh: speed) {
+                store.addEvent(
+                    sessionID: sessionID,
+                    at: Date(),
+                    kind: "DID_SCAN_RESUME_STATIONARY",
+                    note: "ECU \(ecu) DID \(String(format: "%04X", did)): 0 km/h confirmed 3 times"
+                )
+                isDidScanPausedForSpeed = false
+                didScanCurrent = "再開 DID \(String(format: "%04X", did))"
+                statusMessage = "0 km/hを3回連続確認したためDID探索を自動再開しました"
+                activeHeaderCommand = nil
+                return true
+            }
+
+            if let speed {
+                statusMessage = speed <= 0.1
+                    ? "DID探索一時停止中：0 km/h安定確認 \(tracker.consecutiveZeroSamples)/3"
+                    : String(format: "DID探索一時停止中：車速 %.0f km/h。0 km/h安定待ち", speed)
+            } else {
+                statusMessage = "DID探索一時停止中：車速不明。0 km/h安定待ち"
+            }
+
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+
+        isDidScanPausedForSpeed = false
+        return false
     }
 
     private func didTimingProfile(rate: Double) -> (setup: [String], restore: [String], name: String) {
