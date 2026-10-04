@@ -191,6 +191,14 @@ final class AnalyzerViewModel: ObservableObject {
             statusMessage = "ECU確認はRAW証拠を残すためSQLite記録中だけ実行できます"
             return
         }
+        guard elmInitialized else {
+            statusMessage = "先に車両通信を初期化してください"
+            return
+        }
+        guard knownSignalsValidated else {
+            statusMessage = "先に既知信号を確認してください"
+            return
+        }
 
         isBusy = true
         statusMessage = "停車中の安全なECU確認を実行中"
@@ -262,8 +270,20 @@ final class AnalyzerViewModel: ObservableObject {
             statusMessage = "DID探索はRAW証拠を残すためSQLite記録中だけ実行できます"
             return
         }
+        guard elmInitialized else {
+            statusMessage = "DID探索前に車両通信を初期化してください"
+            return
+        }
+        guard knownSignalsValidated else {
+            statusMessage = "DID探索前に既知信号を確認してください"
+            return
+        }
         guard let ecu = normalizedEcuSource(didScanEcu) else {
             statusMessage = "ECU sourceは01のような2桁16進数で指定してください"
+            return
+        }
+        guard observedEcus.contains(where: { $0.source == ecu }) else {
+            statusMessage = "先に安全なECU候補確認を実行し、観測されたECUを選択してください"
             return
         }
 
