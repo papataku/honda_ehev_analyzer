@@ -1,0 +1,27 @@
+name: HondaAnalyzer
+options:
+  createIntermediateGroups: true
+packages:
+  HondaAnalyzerCore:
+    path: .
+targets:
+  HondaAnalyzer:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: HondaAnalyzerCore
+        product: HondaAnalyzerCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.papataku.HondaAnalyzer
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Honda Analyzer
+        NSBluetoothAlwaysUsageDescription: Honda e:HEV vehicle data is read from the KW905 BLE adapter.
+        UILaunchScreen: {}

@@ -1,0 +1,65 @@
+import XCTest
+@testable import HondaAnalyzerCore
+
+final class HondaAnalyzerCoreTests: XCTestCase {
+    func testPromptFramerHandlesFragmentsAndMergedResponses() {
+        let framer = ElmPromptFramer()
+        XCTAssertTrue(framer.feed(Data("41 0C".utf8)).isEmpty)
+        let responses = framer.feed(Data(" 1F 40>OK>tail".utf8))
+        XCTAssertEqual(responses.count, 2)
+        XCTAssertEqual(responses[0].text, "41 0C 1F 40>")
+        XCTAssertEqual(responses[1].text, "OK>")
+        XCTAssertEqual(String(decoding: framer.pending, as: UTF8.self), "tail")
+    }
+
+    func testReadOnlyGuardMatchesPythonPolicy() {
+        XCTAssertTrue(isReadOnlyVehicleCommand("ATZ"))
+        XCTAssertTrue(isReadOnlyVehicleCommand("01 0C"))
+        XCTAssertTrue(isReadOnlyVehicleCommand("0902"))
+        XCTAssertTrue(isReadOnlyVehicleCommand("22 2012"))
+        XCTAssertFalse(isReadOnlyVehicleCommand("2E201200"))
+        XCTAssertFalse(isReadOnlyVehicleCommand("1101"))
+    }
+
+    func testKnownStandardOBDDecoders() {
+        XCTAssertEqual(decodeEngineRPM("18DAF10104410C1F40\r>"), 2000.0)
+        XCTAssertEqual(decodeVehicleSpeed("18DAF10103410D64\r>"), 100)
+        XCTAssertEqual(decodeCoolantC("18DAF10103410550\r>"), 40)
+        let soc = decodeBatterySOC("18DAF10103415B80\r>")
+        XCTAssertNotNil(soc)
+        XCTAssertEqual(soc!, 128.0 * 100.0 / 255.0, accuracy: 0.0001)
+    }
+
+    func testHybridEv9AReassemblesIsoTpAndUsesSignedCurrent() {
+        let text = """
+        18DAF1011008419A06014800
+        18DAF10121FF9C
+        >
+        """
+        let value = decodeHybridEv9A(text)
+        XCTAssertNotNil(value)
+        XCTAssertEqual(value?.voltageV ?? 0, 288.0, accuracy: 0.0001)
+        XCTAssertEqual(value?.currentA ?? 0, -10.0, accuracy: 0.0001)
+        XCTAssertEqual(value?.powerKW ?? 0, -2.88, accuracy: 0.0001)
+    }
+
+    func testUDS22PayloadAndCanID() {
+        let hit = findUDS22Payload("18DAF10106622012AABBCC\r>", did: 0x2012)
+        XCTAssertEqual(hit?.canID, "18DAF101")
+        XCTAssertEqual(hit?.payload, Data([0xAA, 0xBB, 0xCC]))
+    }
+
+    func testPartialIsoTpPreservesReceivedPrefix() {
+        let text = """
+        18DAF101101062201201020304
+        18DAF1012105060708090A0B
+        BUFFER FULL
+        >
+        """
+        let partial = isoTpPartialMessages(text).first
+        XCTAssertNotNil(partial)
+        XCTAssertEqual(partial?.canID, "18DAF101")
+        XCTAssertEqual(partial?.totalLength, 0x10)
+        XCTAssertEqual(partial?.payload.prefix(3), Data([0x62, 0x20, 0x12]))
+    }
+}
