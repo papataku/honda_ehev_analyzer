@@ -145,3 +145,26 @@ The dashboard metric grid is adaptive for iPad split-view/portrait widths, and k
 The Xcode project generates a dedicated Honda Analyzer app icon before the asset-catalog build. The design is intentionally brand-neutral: a vehicle gauge, an analysis waveform, and a wireless/diagnostic signal motif. It does not reuse the Honda logo.
 
 The generated asset is declared as the build-script output so the same icon is produced in CI and local Xcode builds.
+
+
+## High-rate custom ELM327-compatible adapters
+
+The iPad app can now use substantially faster custom ELM327-compatible hardware.
+
+Available app-side targets:
+- 5 req/s
+- 10 req/s
+- 20 req/s
+- 50 req/s
+- 100 req/s
+- unthrottled
+
+Both known-signal live polling and DID discovery expose their own target rate. The app still serializes ELM commands and waits for each prompt before sending the next request; "unthrottled" removes only the artificial app-side delay.
+
+The UI also shows the measured effective rate so the real adapter/ECU limit can be observed.
+
+For DID discovery, **高性能ELM互換機向け短時間タイムアウト** is a separate opt-in. It progressively shortens ELM `ATST` at 20/50/100+ req/s. This can improve NO DATA scanning on fast custom hardware, but it can also create false timeouts if an ECU responds more slowly. Start at 20 req/s, compare Positive/NRC results against a slower control run, and raise the rate only when the response inventory remains stable.
+
+Compatibility mode keeps the previously validated KW905 timing.
+
+Live polling no longer sleeps a fixed one second after each five-signal cycle. It computes the remaining delay from the selected aggregate request-rate target. At 50 req/s, for example, a five-request cycle targets about 10 cycles per second only when the adapter and ECU can actually respond that quickly.
