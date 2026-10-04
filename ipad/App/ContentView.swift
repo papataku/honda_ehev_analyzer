@@ -327,17 +327,19 @@ private struct AnalyzerWorkspace: View {
                     }
                 }
 
-                Section("ELM / 車両") {
-                    Button("ELM初期化") { model.initializeELM() }
-                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
-                    Button("既知信号を1回取得") { model.readKnownSignals() }
-                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
+                Section("詳細操作") {
+                    DisclosureGroup("通信・ライブ取得") {
+                        Button("ELM初期化を再実行") { model.initializeELM() }
+                            .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
+                        Button("既知信号を1回取得") { model.readKnownSignals() }
+                            .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
 
-                    if model.isLivePolling {
-                        Button("ライブ取得停止", role: .destructive) { model.stopLivePolling() }
-                    } else {
-                        Button("既知信号ライブ取得開始") { model.startLivePolling() }
-                            .disabled(model.ble.state != "ready" || model.isBusy || model.isDidScanning)
+                        if model.isLivePolling {
+                            Button("ライブ取得停止", role: .destructive) { model.stopLivePolling() }
+                        } else {
+                            Button("既知信号ライブ取得開始") { model.startLivePolling() }
+                                .disabled(model.ble.state != "ready" || model.isBusy || model.isDidScanning)
+                        }
                     }
                 }
 
@@ -383,21 +385,23 @@ private struct AnalyzerWorkspace: View {
                             .multilineTextAlignment(.trailing)
                     }
 
-                    Picker("探索速度", selection: $model.didScanRateHz) {
-                        Text("2 req/s").tag(2.0)
-                        Text("5 req/s").tag(5.0)
-                        Text("8 req/s").tag(8.0)
-                        Text("10 req/s").tag(10.0)
+                    DisclosureGroup("探索設定") {
+                        Picker("探索速度", selection: $model.didScanRateHz) {
+                            Text("2 req/s").tag(2.0)
+                            Text("5 req/s").tag(5.0)
+                            Text("8 req/s").tag(8.0)
+                            Text("10 req/s").tag(10.0)
+                        }
+
+                        Toggle(
+                            "走行検出時は一時停止し、0 km/h安定後に自動再開",
+                            isOn: $model.autoResumeDidScanAfterStop
+                        )
+
+                        Text("走行中は010Dだけ監視し、DID要求は送信しません。0 km/hを3回連続確認してから再開します。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-
-                    Toggle(
-                        "走行検出時は一時停止し、0 km/h安定後に自動再開",
-                        isOn: $model.autoResumeDidScanAfterStop
-                    )
-
-                    Text("走行中は010Dだけ監視し、DID要求は送信しません。0 km/hを3回連続確認してから再開します。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
 
                     Text("短時間確認: 2000–20FF / 全範囲: adaptive 0000–FFFF")
                         .font(.caption)
@@ -461,7 +465,13 @@ private struct AnalyzerWorkspace: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack {
-                        Text("RP8 Live").font(.largeTitle.bold())
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Honda Analyzer")
+                                .font(.largeTitle.bold())
+                            Text("RP8 e:HEV / evidence-first vehicle analysis")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
                         if model.isRecording {
                             Label("REC", systemImage: "record.circle.fill")
@@ -475,6 +485,17 @@ private struct AnalyzerWorkspace: View {
                             Label("DID", systemImage: "magnifyingglass")
                         }
                         if model.isBusy { ProgressView() }
+                    }
+
+                    SessionWorkflowPanel(
+                        model: model,
+                        onOpenConnection: onOpenConnection
+                    )
+
+                    VehicleSafetyBanner(model: model)
+
+                    if model.knownSignalsValidated {
+                        OperationModeCards(model: model)
                     }
 
                     LazyVGrid(columns: columns, spacing: 12) {
