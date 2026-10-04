@@ -20,3 +20,15 @@ def test_operation_gate_rejects_overlap_and_requires_owner_to_release():
 
     assert gate.begin("connect")
     assert gate.end("connect")
+
+
+def test_mainwindow_wires_gate_and_explicit_discovery_stop_reason():
+    from pathlib import Path
+
+    source = Path("src/honda_analyzer/gui/app.py").read_text(encoding="utf-8")
+    assert "self.connection_gate = OperationGate()" in source
+    assert "if not self._begin_connection_operation(op):return" in source
+    assert "transport=KW905BleTransport" in source
+    assert "if self.transport is transport:" in source
+    assert "stop_reason='speed_safety'" in source
+    assert "stop_reason={stop_reason}" in source
