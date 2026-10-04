@@ -216,4 +216,26 @@ final class HondaAnalyzerCoreTests: XCTestCase {
     }
 #endif
 
+    func testEcuResponderCensusUsesOnly18DAF1SourceIDs() {
+        let text = """
+        18DAF10104410C1F40
+        18DAF10204410C0000
+        18DAF10604410C0000
+        18DB33F102010C
+        >
+        """
+        let responders = ecuResponders(in: text)
+        XCTAssertEqual(responders.map(\.source), ["01", "02", "06"])
+        XCTAssertEqual(responseEcuSource(from: "18DAF1EF"), "EF")
+        XCTAssertNil(responseEcuSource(from: "18DB33F1"))
+    }
+
+    func testSafeEcuCensusAllowListStaysReadOnly() {
+        XCTAssertEqual(safeEcuCensusRequests.count, 6)
+        for request in safeEcuCensusRequests {
+            XCTAssertTrue(isReadOnlyVehicleCommand(request.command))
+            XCTAssertTrue(request.headerCommand.hasPrefix("ATSH"))
+        }
+    }
+
 }
