@@ -734,7 +734,14 @@ final class AnalyzerViewModel: ObservableObject {
 
     private func recordRaw(_ data: Data) {
         guard let store = captureStore, let sid = captureSessionID else { return }
-        store.appendRaw(sessionID: sid, at: Date(), layer: "ble", source: "kw905", payload: data)
+        let source = ble.selectedNotifyUUID.map { "ble:\($0)" } ?? "ble:kw905"
+        store.appendRaw(
+            sessionID: sid,
+            at: Date(),
+            layer: "BLE",
+            source: source,
+            payload: data
+        )
     }
 
     private func recordCommand(_ result: ElmCommandResult) {
