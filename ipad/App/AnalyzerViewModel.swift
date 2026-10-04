@@ -465,12 +465,11 @@ final class AnalyzerViewModel: ObservableObject {
                 "properties": $0.properties
             ] as [String: Any]
         }
-        let metadata: [String: Any] = [
-            "name": ble.connectedDeviceName as Any,
-            "selected_write_uuid": ble.selectedWriteUUID as Any,
-            "selected_notify_uuid": ble.selectedNotifyUUID as Any,
-            "gatt": inventory
-        ]
+        var metadata: [String: Any] = ["gatt": inventory]
+        if let name = ble.connectedDeviceName { metadata["name"] = name }
+        if let write = ble.selectedWriteUUID { metadata["selected_write_uuid"] = write }
+        if let notify = ble.selectedNotifyUUID { metadata["selected_notify_uuid"] = notify }
+
         guard JSONSerialization.isValidJSONObject(metadata),
               let data = try? JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else {
