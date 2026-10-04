@@ -322,7 +322,7 @@ public final class CaptureStore: @unchecked Sendable {
     }
 
     private func bindBlob(_ statement: OpaquePointer, _ index: Int32, _ data: Data) {
-        data.withUnsafeBytes { bytes in
+        _ = data.withUnsafeBytes { bytes in
             sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(data.count), sqliteTransient)
         }
     }
