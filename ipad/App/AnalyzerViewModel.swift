@@ -226,7 +226,7 @@ final class AnalyzerViewModel: ObservableObject {
                         guard let speed, speed <= 0.1 else {
                             let stopped = DidProbeOutcome(
                                 ecu: ecu, did: did, status: .stoppedSpeed,
-                                rawText: speed == nil ? "vehicle speed unavailable" : "vehicle speed \(speed) km/h"
+                                rawText: speed.map { "vehicle speed \($0) km/h" } ?? "vehicle speed unavailable"
                             )
                             store.saveDidScan(sessionID: sid, at: Date(), outcome: stopped)
                             didScanCurrent = "安全停止 DID \(String(format: "%04X", did))"
