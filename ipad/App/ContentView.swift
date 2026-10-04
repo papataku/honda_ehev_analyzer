@@ -356,6 +356,8 @@ private struct AnalyzerWorkspace: View {
                         model.ble.state != "ready" ||
                         !model.isRecording ||
                         !model.stationaryConfirmed ||
+                        !model.elmInitialized ||
+                        !model.knownSignalsValidated ||
                         model.isBusy ||
                         model.isLivePolling ||
                         model.isDidScanning
@@ -426,6 +428,9 @@ private struct AnalyzerWorkspace: View {
                             model.ble.state != "ready" ||
                             !model.isRecording ||
                             !model.stationaryConfirmed ||
+                            !model.elmInitialized ||
+                            !model.knownSignalsValidated ||
+                            model.observedEcus.isEmpty ||
                             model.isBusy ||
                             model.isLivePolling
                         )
