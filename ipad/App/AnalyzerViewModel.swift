@@ -414,6 +414,9 @@ final class AnalyzerViewModel: ObservableObject {
 
             if headerOff {
                 if let h1 = try? await session.command("ATH1", timeout: 3.0) { append(h1) }
+                // ATH0/ATH1 changes output/header state outside selectHeader().
+                // Force the next vehicle request to explicitly re-apply its CAN header.
+                activeHeaderCommand = nil
             }
             return best
         } catch ElmCommandError.timeout {
