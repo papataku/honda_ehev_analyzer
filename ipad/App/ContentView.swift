@@ -330,13 +330,18 @@ private struct AnalyzerWorkspace: View {
                 Section("記録") {
                     if model.isRecording {
                         Button("記録終了") { model.stopRecording() }
-                            .disabled(model.isDidScanning)
+                            .disabled(model.isDidScanning || model.isLivePolling || model.isBusy)
                         Text(model.recordingFile)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
                         Button("SQLite記録開始") { model.startRecording() }
-                            .disabled(model.ble.state != "ready" || model.isDidScanning)
+                            .disabled(
+                                model.ble.state != "ready" ||
+                                model.isDidScanning ||
+                                model.isLivePolling ||
+                                model.isBusy
+                            )
                         if let url = model.recordingURL {
                             ShareLink(item: url) {
                                 Label("直前のSQLiteを共有", systemImage: "square.and.arrow.up")
@@ -578,6 +583,8 @@ private struct AnalyzerWorkspace: View {
                             }
                         }
                     }
+
+                    SessionExportPanel(model: model)
 
                     GroupBox("技術ログ") {
                         VStack(alignment: .leading, spacing: 12) {
