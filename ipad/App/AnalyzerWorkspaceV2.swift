@@ -341,12 +341,38 @@ private struct DiscoveryPage: View {
                         DisclosureGroup("探索設定") {
                             VStack(alignment: .leading, spacing: 12) {
                                 Picker("探索速度", selection: $model.didScanRateHz) {
-                                    Text("2 req/s").tag(2.0)
                                     Text("5 req/s").tag(5.0)
-                                    Text("8 req/s").tag(8.0)
                                     Text("10 req/s").tag(10.0)
+                                    Text("20 req/s").tag(20.0)
+                                    Text("50 req/s").tag(50.0)
+                                    Text("100 req/s").tag(100.0)
                                 }
-                                .pickerStyle(.segmented)
+                                .pickerStyle(.menu)
+                                .disabled(model.didScanUnthrottled)
+
+                                Toggle(
+                                    "アプリ側のレート制限なし",
+                                    isOn: $model.didScanUnthrottled
+                                )
+
+                                if model.isDidScanning {
+                                    LabeledContent(
+                                        "実効DIDレート",
+                                        value: String(
+                                            format: "%.1f DID/s",
+                                            model.didScanEffectiveRateHz
+                                        )
+                                    )
+                                }
+
+                                Toggle(
+                                    "高性能ELM互換機向け短時間タイムアウト",
+                                    isOn: $model.aggressiveElmTimingEnabled
+                                )
+
+                                Text("高性能モードはATSTを短くします。自作アダプタや十分に検証したECUでのみ使用してください。応答の遅いECUではfalse timeoutの可能性があります。")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
 
                                 Toggle(
                                     "走行検出時は一時停止し、0 km/h安定後に自動再開",
@@ -585,6 +611,14 @@ private struct TechnicalPage: View {
                         LabeledContent("既知信号", value: model.knownSignalsValidated ? "確認済み" : "未確認")
                         LabeledContent("記録", value: model.isRecording ? "記録中" : "停止")
                         LabeledContent("DID", value: model.didScanCurrent)
+                        LabeledContent(
+                            "ライブ実効レート",
+                            value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+                        LabeledContent(
+                            "DID実効レート",
+                            value: String(format: "%.1f DID/s", model.didScanEffectiveRateHz)
+                        )
                         Text(model.statusMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -623,16 +657,70 @@ private struct SettingsPage: View {
                     .disabled(model.isDidScanning)
                 }
 
-                AnalyzerCard("DID探索", systemImage: "magnifyingglass.circle") {
+                AnalyzerCard("アダプタ性能", systemImage: "bolt.horizontal.circle") {
                     VStack(alignment: .leading, spacing: 14) {
-                        Picker("既定の探索速度", selection: $model.didScanRateHz) {
-                            Text("2 req/s").tag(2.0)
-                            Text("5 req/s").tag(5.0)
-                            Text("8 req/s").tag(8.0)
-                            Text("10 req/s").tag(10.0)
+                        Text("自作ELM327互換機の性能に合わせて、アプリ側の待ち時間を引き上げられます。コマンド自体は安全のため1要求ずつ直列送信します。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Picker("ライブ監視 目標req/s", selection: $model.livePollingRequestRateHz) {
+                            Text("5").tag(5.0)
+                            Text("10").tag(10.0)
+                            Text("20").tag(20.0)
+                            Text("50").tag(50.0)
+                            Text("100").tag(100.0)
                         }
                         .pickerStyle(.segmented)
+                        .disabled(model.livePollingUnthrottled || model.isLivePolling)
 
+                        Toggle(
+                            "ライブ監視：アプリ側レート制限なし",
+                            isOn: $model.livePollingUnthrottled
+                        )
+                        .disabled(model.isLivePolling)
+
+                        LabeledContent(
+                            "ライブ実効レート",
+                            value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+
+                        Divider()
+
+                        Picker("DID探索 目標req/s", selection: $model.didScanRateHz) {
+                            Text("5").tag(5.0)
+                            Text("10").tag(10.0)
+                            Text("20").tag(20.0)
+                            Text("50").tag(50.0)
+                            Text("100").tag(100.0)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.didScanUnthrottled || model.isDidScanning)
+
+                        Toggle(
+                            "DID探索：アプリ側レート制限なし",
+                            isOn: $model.didScanUnthrottled
+                        )
+                        .disabled(model.isDidScanning)
+
+                        LabeledContent(
+                            "DID実効レート",
+                            value: String(format: "%.1f DID/s", model.didScanEffectiveRateHz)
+                        )
+
+                        Toggle(
+                            "高性能ELM互換機向け短時間タイムアウト",
+                            isOn: $model.aggressiveElmTimingEnabled
+                        )
+                        .disabled(model.isDidScanning)
+
+                        Text("高性能モードでは20Hz以上でATSTを段階的に短縮します。false timeoutを避けるため、まず20 req/sから実測して上げてください。")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                AnalyzerCard("DID探索の安全動作", systemImage: "magnifyingglass.circle") {
+                    VStack(alignment: .leading, spacing: 14) {
                         Toggle(
                             "走行検出時は一時停止し、0 km/h安定後に自動再開",
                             isOn: $model.autoResumeDidScanAfterStop
