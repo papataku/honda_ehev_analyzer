@@ -12,7 +12,7 @@ struct ContentView: View {
                     showConnectionScreen = false
                 }
             } else {
-                AnalyzerWorkspace(model: model) {
+                FinalAnalyzerWorkspace(model: model) {
                     showConnectionScreen = true
                 }
             }
