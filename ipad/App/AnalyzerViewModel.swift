@@ -310,12 +310,14 @@ final class AnalyzerViewModel: ObservableObject {
                     pageScores[didPageIndex(did), default: 0] += 100
                 }
 
+                @MainActor
                 func isPending(_ did: UInt16) -> Bool {
                     did >= start && did <= end &&
                     !completed.contains(did) &&
                     !attempted.contains(did)
                 }
 
+                @MainActor
                 func probeOne(_ did: UInt16, phase: String) async throws {
                     if aborted || didScanStopRequested || Task.isCancelled || !isPending(did) {
                         return
@@ -377,6 +379,7 @@ final class AnalyzerViewModel: ObservableObject {
                     }
                 }
 
+                @MainActor
                 func probeCandidates(_ candidates: [UInt16], phase: String) async throws {
                     for did in candidates {
                         if aborted || didScanStopRequested || Task.isCancelled { return }
