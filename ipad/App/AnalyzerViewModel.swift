@@ -86,7 +86,13 @@ final class AnalyzerViewModel: ObservableObject {
             recordingURL = url
             recordingFile = url.lastPathComponent
             isRecording = true
-            statusMessage = "記録開始"
+
+            // Evidence-first workflow: communication readiness must be proven
+            // again inside every new capture session so initialization and
+            // known-signal evidence are present in that SQLite file.
+            elmInitialized = false
+            knownSignalsValidated = false
+            statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
         } catch {
             statusMessage = "記録開始失敗: \(error.localizedDescription)"
