@@ -62,4 +62,42 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(partial?.totalLength, 0x10)
         XCTAssertEqual(partial?.payload.prefix(3), Data([0x62, 0x20, 0x12]))
     }
+    @MainActor
+    func testElmCommandSessionSerializesAndFramesResponse() async throws {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            var writes: [Data] = []
+            func write(_ data: Data) throws { writes.append(data) }
+            func emit(_ text: String) { onReceive?(Data(text.utf8)) }
+        }
+
+        let transport = FakeTransport()
+        let session = ElmCommandSession(transport: transport)
+        let task = Task { try await session.command("010C", timeout: 1.0) }
+        await Task.yield()
+        XCTAssertEqual(String(decoding: transport.writes.first ?? Data(), as: UTF8.self), "010C\r")
+        transport.emit("18DAF10104410C")
+        transport.emit("1F40\r>")
+        let result = try await task.value
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(decodeEngineRPM(result.text), 2000.0)
+    }
+
+    @MainActor
+    func testElmCommandSessionBlocksUnsafeVehicleWrite() async {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            func write(_ data: Data) throws {}
+        }
+
+        let session = ElmCommandSession(transport: FakeTransport())
+        do {
+            _ = try await session.command("2E201200")
+            XCTFail("unsafe command should be blocked")
+        } catch ElmCommandError.unsafeCommand {
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
 }

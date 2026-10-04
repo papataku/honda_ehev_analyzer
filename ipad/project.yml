@@ -25,3 +25,5 @@ targets:
         CFBundleDisplayName: Honda Analyzer
         NSBluetoothAlwaysUsageDescription: Honda e:HEV vehicle data is read from the KW905 BLE adapter.
         UILaunchScreen: {}
+        UIBackgroundModes:
+          - bluetooth-central

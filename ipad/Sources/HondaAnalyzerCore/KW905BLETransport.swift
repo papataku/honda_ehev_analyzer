@@ -24,7 +24,7 @@ public enum BLETransportError: LocalizedError {
 }
 
 @MainActor
-public final class KW905BLETransport: NSObject, ObservableObject {
+public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTransport {
     @Published public private(set) var devices: [BLEDevice] = []
     @Published public private(set) var state = "idle"
     @Published public private(set) var gattInventory: [GattCharacteristicInfo] = []

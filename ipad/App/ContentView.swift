@@ -2,55 +2,96 @@ import SwiftUI
 import HondaAnalyzerCore
 
 struct ContentView: View {
-    @StateObject private var ble = KW905BLETransport()
+    @StateObject private var model = AnalyzerViewModel()
+    private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
 
     var body: some View {
         NavigationSplitView {
             List {
                 Section("KW905 BLE") {
-                    Text("状態: \(ble.state)")
+                    Text("状態: \(model.ble.state)")
                     Button("5秒スキャン") {
-                        ble.startScan()
+                        model.ble.startScan()
                         Task {
                             try? await Task.sleep(nanoseconds: 5_000_000_000)
-                            await MainActor.run { ble.stopScan() }
+                            await MainActor.run { model.ble.stopScan() }
                         }
                     }
-                    ForEach(ble.devices) { device in
-                        Button {
-                            try? ble.connect(to: device.id)
-                        } label: {
+                    .disabled(model.isBusy)
+
+                    ForEach(model.ble.devices) { device in
+                        Button { try? model.ble.connect(to: device.id) } label: {
                             VStack(alignment: .leading) {
                                 Text(device.name ?? "名称不明")
-                                Text("\(device.id.uuidString)  RSSI \(device.rssi)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Text("RSSI \(device.rssi)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
+
+                Section("ELM / 車両") {
+                    Button("ELM初期化") { model.initializeELM() }
+                        .disabled(model.ble.state != "ready" || model.isBusy)
+                    Button("既知信号を取得") { model.readKnownSignals() }
+                        .disabled(model.ble.state != "ready" || model.isBusy)
+                    Text(model.statusMessage).font(.caption).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Honda Analyzer")
         } detail: {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("iPad Native Analyzer").font(.largeTitle.bold())
-                Text("Phase 1: KW905 BLE接続とMac版互換のELM/OBD/UDS解析コア")
-                    .foregroundStyle(.secondary)
-                GroupBox("GATT") {
-                    if ble.gattInventory.isEmpty {
-                        Text("接続後にGATT characteristicを表示します").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(ble.gattInventory.enumerated()), id: \.offset) { _, item in
-                            VStack(alignment: .leading) {
-                                Text(item.uuid)
-                                Text("\(item.serviceUUID)  \(item.properties.joined(separator: ", "))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("RP8 Live").font(.largeTitle.bold())
+                        Spacer()
+                        if model.isBusy { ProgressView() }
                     }
+
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        MetricCard(title: "ENGINE RPM", value: model.rpm.map { String(format: "%.0f", $0) } ?? "--", unit: "rpm")
+                        MetricCard(title: "SPEED", value: model.speedKmh.map(String.init) ?? "--", unit: "km/h")
+                        MetricCard(title: "COOLANT", value: model.coolantC.map(String.init) ?? "--", unit: "°C")
+                        MetricCard(title: "HV SOC", value: model.socPercent.map { String(format: "%.1f", $0) } ?? "--", unit: "%")
+                        MetricCard(title: "HV VOLTAGE", value: model.hvVoltage.map { String(format: "%.1f", $0) } ?? "--", unit: "V")
+                        MetricCard(title: "HV CURRENT", value: model.hvCurrent.map { String(format: "%.1f", $0) } ?? "--", unit: "A")
+                        MetricCard(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW")
+                    }
+
+                    GroupBox("ELM transcript") {
+                        Text(model.transcript.suffix(40).joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("GATT") {
+                        VStack(alignment: .leading) {
+                            ForEach(Array(model.ble.gattInventory.enumerated()), id: \.offset) { _, item in
+                                Text("\(item.serviceUUID) / \(item.uuid) / \(item.properties.joined(separator: ", "))")
+                                    .font(.caption)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.padding()
+            }
+        }
+    }
+}
+
+private struct MetricCard: View {
+    let title: String
+    let value: String
+    let unit: String
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(value).font(.system(size: 32, weight: .semibold, design: .rounded))
+                    Text(unit).font(.caption).foregroundStyle(.secondary)
                 }
-                Spacer()
-            }.padding()
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

@@ -28,3 +28,9 @@ Use a physical iPad for BLE validation.
 
 ## Safety
 Automated unknown discovery remains UDS 0x22 only and stationary-only. No write/session/security/routine-control/actuator services are added.
+
+
+## Live known-signal path
+The app now has a serialized ELM command session and a first live path:
+`AT init -> ATCP18 -> ATSHDB33F1 -> 010C/010D/0105/015B/019A`.
+The UI shows RPM, speed, coolant, SOC, HV voltage/current/power and keeps a command transcript.
