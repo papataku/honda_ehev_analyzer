@@ -25,3 +25,6 @@ readiness/
 
 # One-time canonical source bootstrap environment
 .venv-bootstrap/
+
+# Generated iPad app icon
+ipad/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
