@@ -67,6 +67,7 @@ final class AnalyzerViewModel: ObservableObject {
             let sid = try store.createSession(toolVersion: "ipad-native")
             captureStore = store
             captureSessionID = sid
+            saveBleSnapshot(store: store, sessionID: sid)
             recordingURL = url
             recordingFile = url.lastPathComponent
             isRecording = true
@@ -454,6 +455,34 @@ final class AnalyzerViewModel: ObservableObject {
         } catch {
             transcript.append("DID inventory error: \(error.localizedDescription)")
         }
+    }
+
+    private func saveBleSnapshot(store: CaptureStore, sessionID: Int64) {
+        let inventory = ble.gattInventory.map {
+            [
+                "service_uuid": $0.serviceUUID,
+                "uuid": $0.uuid,
+                "properties": $0.properties
+            ] as [String: Any]
+        }
+        let metadata: [String: Any] = [
+            "name": ble.connectedDeviceName as Any,
+            "selected_write_uuid": ble.selectedWriteUUID as Any,
+            "selected_notify_uuid": ble.selectedNotifyUUID as Any,
+            "gatt": inventory
+        ]
+        guard JSONSerialization.isValidJSONObject(metadata),
+              let data = try? JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            transcript.append("BLE metadata snapshot could not be serialized")
+            return
+        }
+        store.saveDevice(
+            sessionID: sessionID,
+            kind: "ble",
+            identifier: ble.connectedDeviceID?.uuidString ?? "unknown",
+            metadataJSON: json
+        )
     }
 
     private func prepareMode01() async throws {
