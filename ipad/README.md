@@ -34,3 +34,9 @@ Automated unknown discovery remains UDS 0x22 only and stationary-only. No write/
 The app now has a serialized ELM command session and a first live path:
 `AT init -> ATCP18 -> ATSHDB33F1 -> 010C/010D/0105/015B/019A`.
 The UI shows RPM, speed, coolant, SOC, HV voltage/current/power and keeps a command transcript.
+
+
+## Evidence capture
+The iPad port now writes the Mac-compatible SQLite schema with WAL + FULL synchronous durability.
+Incoming BLE notification chunks are stored in `raw_capture`, completed ELM commands in `commands`, and drive markers in `events`.
+Writes use a dedicated serial queue so UI rendering is not used as the storage execution path.

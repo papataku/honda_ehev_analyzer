@@ -4,6 +4,7 @@ import HondaAnalyzerCore
 struct ContentView: View {
     @StateObject private var model = AnalyzerViewModel()
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    private let markers = ["STOP", "EV", "ENGINE ON", "ACCEL", "CRUISE", "REGEN"]
 
     var body: some View {
         NavigationSplitView {
@@ -16,8 +17,7 @@ struct ContentView: View {
                             try? await Task.sleep(nanoseconds: 5_000_000_000)
                             await MainActor.run { model.ble.stopScan() }
                         }
-                    }
-                    .disabled(model.isBusy)
+                    }.disabled(model.isBusy)
 
                     ForEach(model.ble.devices) { device in
                         Button { try? model.ble.connect(to: device.id) } label: {
@@ -26,6 +26,16 @@ struct ContentView: View {
                                 Text("RSSI \(device.rssi)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                    }
+                }
+
+                Section("記録") {
+                    if model.isRecording {
+                        Button("記録終了") { model.stopRecording() }
+                        Text(model.recordingFile).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("SQLite記録開始") { model.startRecording() }
+                            .disabled(model.ble.state != "ready")
                     }
                 }
 
@@ -44,6 +54,7 @@ struct ContentView: View {
                     HStack {
                         Text("RP8 Live").font(.largeTitle.bold())
                         Spacer()
+                        if model.isRecording { Label("REC", systemImage: "record.circle.fill") }
                         if model.isBusy { ProgressView() }
                     }
 
@@ -55,6 +66,15 @@ struct ContentView: View {
                         MetricCard(title: "HV VOLTAGE", value: model.hvVoltage.map { String(format: "%.1f", $0) } ?? "--", unit: "V")
                         MetricCard(title: "HV CURRENT", value: model.hvCurrent.map { String(format: "%.1f", $0) } ?? "--", unit: "A")
                         MetricCard(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW")
+                    }
+
+                    GroupBox("Drive markers") {
+                        HStack {
+                            ForEach(markers, id: \.self) { marker in
+                                Button(marker) { model.addMarker(marker) }
+                                    .disabled(!model.isRecording)
+                            }
+                        }
                     }
 
                     GroupBox("ELM transcript") {
@@ -82,7 +102,6 @@ private struct MetricCard: View {
     let title: String
     let value: String
     let unit: String
-
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {

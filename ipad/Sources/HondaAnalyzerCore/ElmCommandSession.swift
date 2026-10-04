@@ -42,6 +42,9 @@ public func elmResponseSuccess(_ text: String) -> Bool {
 
 @MainActor
 public final class ElmCommandSession {
+    public var onRawReceive: ((Data) -> Void)?
+    public var onResult: ((ElmCommandResult) -> Void)?
+
     private struct Pending {
         let id: UUID
         let command: String
@@ -102,16 +105,19 @@ public final class ElmCommandSession {
     }
 
     private func receive(_ data: Data) {
+        onRawReceive?(data)
         let responses = framer.feed(data)
         guard let response = responses.first, let current = pending else { return }
         pending = nil
-        current.continuation.resume(returning: ElmCommandResult(
+        let result = ElmCommandResult(
             command: current.command,
             raw: response.raw,
             text: response.text,
             latencyMs: Date().timeIntervalSince(current.started) * 1000.0,
             success: elmResponseSuccess(response.text)
-        ))
+        )
+        onResult?(result)
+        current.continuation.resume(returning: result)
     }
 
     private func timeout(id: UUID) {

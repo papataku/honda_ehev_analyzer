@@ -100,4 +100,30 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testElmSessionEvidenceHooksReceiveRawAndCommandResult() async throws {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            func write(_ data: Data) throws {}
+            func emit(_ data: Data) { onReceive?(data) }
+        }
+
+        let transport = FakeTransport()
+        let session = ElmCommandSession(transport: transport)
+        var rawChunks: [Data] = []
+        var results: [ElmCommandResult] = []
+        session.onRawReceive = { rawChunks.append($0) }
+        session.onResult = { results.append($0) }
+
+        let task = Task { try await session.command("010D", timeout: 1.0) }
+        await Task.yield()
+        transport.emit(Data("18DAF10103410D".utf8))
+        transport.emit(Data("2A\r>".utf8))
+        _ = try await task.value
+
+        XCTAssertEqual(rawChunks.count, 2)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.command, "010D")
+    }
+
 }

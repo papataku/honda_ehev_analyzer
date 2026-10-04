@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [.library(name: "HondaAnalyzerCore", targets: ["HondaAnalyzerCore"])],
     targets: [
-        .target(name: "HondaAnalyzerCore"),
+        .target(name: "HondaAnalyzerCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .testTarget(name: "HondaAnalyzerCoreTests", dependencies: ["HondaAnalyzerCore"])
     ]
 )
