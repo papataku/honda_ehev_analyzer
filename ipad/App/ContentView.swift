@@ -110,7 +110,7 @@ struct ContentView: View {
                         Text("10 req/s").tag(10.0)
                     }
 
-                    Text("初期対象: 2000–20FF")
+                    Text("短時間確認: 2000–20FF / 全範囲: adaptive 0000–FFFF")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -125,6 +125,27 @@ struct ContentView: View {
                                 model.isBusy ||
                                 model.isLivePolling
                             )
+
+                        Toggle(
+                            "全範囲は数時間規模。途中保存・複数日に分けて再開することを理解しました",
+                            isOn: $model.longDidScanAcknowledged
+                        )
+
+                        Button("adaptive 0000–FFFF 探索 / 再開") {
+                            model.startAdaptiveFullDidScan()
+                        }
+                        .disabled(
+                            model.ble.state != "ready" ||
+                            !model.isRecording ||
+                            !model.stationaryConfirmed ||
+                            !model.longDidScanAcknowledged ||
+                            model.isBusy ||
+                            model.isLivePolling
+                        )
+
+                        Text("順序: 2000帯 → 16領域先頭 → 0x100ページ代表 → 反応ページ深掘り → 未探索全埋め。過去のiPad SQLiteもresumeに使用します。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
 
                     ProgressView(value: model.didScanProgress)
