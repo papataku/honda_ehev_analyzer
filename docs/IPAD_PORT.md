@@ -309,6 +309,44 @@ Use a physical iPad; the simulator is only a compile/UI gate.
 
 Do not begin a full 0000–FFFF iPad sweep until this first hardware gate passes.
 
+## Physical validation result — 2026-10-04
+
+The first real iPad/KW905/RP8 hardware gate passed using an exported iPad SQLite capture.
+
+Verified from the capture:
+
+- SQLite integrity: `ok`; session closed cleanly.
+- 865 raw BLE chunks / 12,594 raw bytes were preserved.
+- 274 ELM commands were recorded with no command-row failures after positive-partial promotion.
+- KW905 GATT selection was correct:
+  - service `FFF0`
+  - notify `FFF1`
+  - write-without-response `FFF2`
+- ELM identification/protocol:
+  - `ELM327 v1.5`
+  - `ISO 15765-4 (CAN 29/500)`
+- Mode 01 responders observed: `18DAF101`, `18DAF102`, `18DAF106`, `18DAF10E`, `18DAF1EF`.
+- Known signals decoded successfully:
+  - engine RPM
+  - vehicle speed
+  - coolant
+  - HV SOC
+  - HV voltage/current/power
+- Stationary speed checks returned 0 km/h during discovery.
+- ECU source `01` scan reached DID `207B`, covering 124 unique DIDs.
+- Scan outcomes:
+  - 6 complete Positive
+  - 11 `positive_partial`
+  - 107 NRC `0x31`
+- Those 17 Positive/partial DIDs match the prior Session-15 source-01 inventory within the scanned subset.
+- All 11 long Positive responses exercised real `BUFFER FULL` recovery.
+- `ATH0` compact retry increased the preserved application-data prefix from about 70–78 bytes to 108–112 bytes.
+- The long replies still did not fit completely, so they correctly remain `positive_partial`.
+
+The uploaded raw vehicle database is not committed to the public repository. Only this validation summary is retained.
+
+This closes the initial physical-iPad gate. The next iPad implementation step is parity with the macOS adaptive full-range DID ordering while preserving the same stationary/read-only safety rules.
+
 ## Regression gates
 
 CI runs on Apple SDK:
