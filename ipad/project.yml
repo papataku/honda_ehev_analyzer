@@ -14,11 +14,16 @@ targets:
     dependencies:
       - package: HondaAnalyzerCore
         product: HondaAnalyzerCore
+    preBuildScripts:
+      - name: Generate App Icon
+        script: |
+          xcrun swift "$SRCROOT/Tools/GenerateAppIcon.swift" "$SRCROOT/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.papataku.HondaAnalyzer
         TARGETED_DEVICE_FAMILY: "2"
         SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:
