@@ -282,6 +282,7 @@ private struct BLEConnectionView: View {
 private struct AnalyzerWorkspace: View {
     @ObservedObject var model: AnalyzerViewModel
     let onOpenConnection: () -> Void
+    @State private var showFullScanConfirmation = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 180, maximum: 320), spacing: 12)
@@ -346,9 +347,9 @@ private struct AnalyzerWorkspace: View {
                 }
 
                 Section("DID探索（停車のみ）") {
-                    Toggle("完全停止・Pレンジを確認", isOn: $model.stationaryConfirmed)
+                    Toggle("1. 完全停止・Pレンジを確認", isOn: $model.stationaryConfirmed)
 
-                    Button("既知の安全な要求でECU候補を確認") {
+                    Button("2. 安全な既知要求でECU候補を確認") {
                         model.runSafeEcuCensus()
                     }
                     .disabled(
@@ -361,6 +362,10 @@ private struct AnalyzerWorkspace: View {
                     )
 
                     if !model.observedEcus.isEmpty {
+                        Text("3. 対象ECUを選択")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+
                         ForEach(model.observedEcus) { ecu in
                             Button {
                                 model.selectDidEcu(ecu.source)
@@ -414,7 +419,7 @@ private struct AnalyzerWorkspace: View {
                             model.stopDidScan()
                         }
                     } else {
-                        Button("2000–20FF 探索 / 再開") {
+                        Button("4A. 短時間 2000–20FF 探索 / 再開") {
                             model.startDidScan2000Range()
                         }
                         .disabled(
@@ -425,19 +430,14 @@ private struct AnalyzerWorkspace: View {
                             model.isLivePolling
                         )
 
-                        Toggle(
-                            "全範囲は数時間規模。途中保存・複数日に分けて再開することを理解しました",
-                            isOn: $model.longDidScanAcknowledged
-                        )
-
-                        Button("adaptive 0000–FFFF 探索 / 再開") {
-                            model.startAdaptiveFullDidScan()
+                        Button("4B. 全範囲 0000–FFFF 探索 / 再開") {
+                            showFullScanConfirmation = true
                         }
                         .disabled(
                             model.ble.state != "ready" ||
                             !model.isRecording ||
                             !model.stationaryConfirmed ||
-                            !model.longDidScanAcknowledged ||
+                            model.observedEcus.isEmpty ||
                             model.isBusy ||
                             model.isLivePolling
                         )
@@ -564,6 +564,20 @@ private struct AnalyzerWorkspace: View {
                 }
                 .padding()
             }
+        }
+        .confirmationDialog(
+            "全範囲DID探索を開始しますか？",
+            isPresented: $showFullScanConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("停車中に全範囲探索を開始") {
+                model.longDidScanAcknowledged = true
+                model.startAdaptiveFullDidScan()
+                model.longDidScanAcknowledged = false
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("0000–FFFFは数時間規模です。走行を検出するとDID送信は一時停止し、0 km/h安定後に再開します。結果はSQLiteへ逐次保存され、別日に続きから再開できます。")
         }
     }
 }
