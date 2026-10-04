@@ -27,6 +27,12 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var longDidScanAcknowledged = false
     @Published var didScanEcu = "01"
     @Published var didScanRateHz = 5.0
+    @Published var didScanUnthrottled = false
+    @Published var aggressiveElmTimingEnabled = false
+    @Published var didScanEffectiveRateHz = 0.0
+    @Published var livePollingRequestRateHz = 5.0
+    @Published var livePollingUnthrottled = false
+    @Published var liveEffectiveRequestRateHz = 0.0
     @Published var didScanProgress = 0.0
     @Published var didScanCurrent = "未開始"
     @Published var didPositiveCount = 0
@@ -162,19 +168,44 @@ final class AnalyzerViewModel: ObservableObject {
     func startLivePolling() {
         guard !isBusy, !isLivePolling, !isDidScanning else { return }
         isLivePolling = true
-        statusMessage = "既知信号ライブ取得中"
+        liveEffectiveRequestRateHz = 0
+
+        let targetRate = max(1.0, livePollingRequestRateHz)
+        let unthrottled = livePollingUnthrottled
+        statusMessage = unthrottled
+            ? "既知信号ライブ取得中：アプリ側レート制限なし"
+            : "既知信号ライブ取得中：目標 \(targetRate.formatted()) req/s"
 
         liveTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await prepareMode01()
                 while !Task.isCancelled {
+                    let cycleStarted = Date()
                     try await pollKnownCycle()
                     if rpm != nil && speedKmh != nil && coolantC != nil &&
                         socPercent != nil && hvVoltage != nil && hvCurrent != nil {
                         knownSignalsValidated = true
                     }
-                    try await Task.sleep(nanoseconds: 1_000_000_000)
+
+                    let elapsed = Date().timeIntervalSince(cycleStarted)
+                    let delay = pollingDelaySeconds(
+                        requestCount: 5,
+                        targetRequestRateHz: targetRate,
+                        elapsedSeconds: elapsed,
+                        unthrottled: unthrottled
+                    )
+                    if delay > 0 {
+                        try await Task.sleep(
+                            nanoseconds: UInt64(delay * 1_000_000_000)
+                        )
+                    }
+
+                    let cycleSeconds = max(
+                        0.001,
+                        Date().timeIntervalSince(cycleStarted)
+                    )
+                    liveEffectiveRequestRateHz = 5.0 / cycleSeconds
                 }
             } catch is CancellationError {
             } catch {
@@ -190,6 +221,7 @@ final class AnalyzerViewModel: ObservableObject {
         liveTask?.cancel()
         liveTask = nil
         isLivePolling = false
+        liveEffectiveRequestRateHz = 0
         statusMessage = "ライブ取得停止"
     }
 
@@ -309,8 +341,15 @@ final class AnalyzerViewModel: ObservableObject {
 
         didScanTask = Task { [weak self] in
             guard let self else { return }
-            let rate = max(0.5, didScanRateHz)
-            let timing = didTimingProfile(rate: rate)
+            let rate = max(1.0, didScanRateHz)
+            let unthrottled = didScanUnthrottled
+            let timing = elmDidPollingTimingProfile(
+                targetRateHz: rate,
+                unthrottled: unthrottled,
+                aggressive: aggressiveElmTimingEnabled
+            )
+            let targetLabel = unthrottled ? "制限なし" : "\(rate.formatted()) req/s"
+            didScanEffectiveRateHz = 0
             var timingTouched = false
 
             do {
@@ -349,7 +388,7 @@ final class AnalyzerViewModel: ObservableObject {
                     timingTouched = true
                     do {
                         for command in timing.setup { try await sendAT(command) }
-                        statusMessage = "DID探索中：ELM \(timing.name)設定 / 目標 \(rate.formatted()) req/s"
+                        statusMessage = "DID探索中：ELM \(timing.name)設定 / 目標 \(targetLabel)"
                     } catch {
                         for command in timing.restore { _ = try? await commandIgnoringFailure(command) }
                         statusMessage = "高速タイミング設定を使えないため通常設定で探索します"
@@ -357,6 +396,7 @@ final class AnalyzerViewModel: ObservableObject {
                 }
 
                 let total = pendingCount
+                let scanRateStarted = Date()
                 var attempted = Set<UInt16>()
                 var consecutiveErrors = 0
                 var nextSpeedCheck = Date()
@@ -405,6 +445,10 @@ final class AnalyzerViewModel: ObservableObject {
                     let outcome = await requestDidWithCompactRetry(ecu: ecu, did: did)
                     store.saveDidScan(sessionID: sid, at: Date(), outcome: outcome)
                     attempted.insert(did)
+                    didScanEffectiveRateHz = Double(attempted.count) / max(
+                        0.001,
+                        Date().timeIntervalSince(scanRateStarted)
+                    )
 
                     let score = didOutcomeInterestScore(status: outcome.status, nrc: outcome.nrc)
                     if score > 0 {
@@ -432,10 +476,16 @@ final class AnalyzerViewModel: ObservableObject {
                         return
                     }
 
-                    let period = 1.0 / rate
-                    let elapsed = Date().timeIntervalSince(started)
-                    if elapsed < period {
-                        try await Task.sleep(nanoseconds: UInt64((period - elapsed) * 1_000_000_000))
+                    let delay = pollingDelaySeconds(
+                        requestCount: 1,
+                        targetRequestRateHz: rate,
+                        elapsedSeconds: Date().timeIntervalSince(started),
+                        unthrottled: unthrottled
+                    )
+                    if delay > 0 {
+                        try await Task.sleep(
+                            nanoseconds: UInt64(delay * 1_000_000_000)
+                        )
                     }
                 }
 
@@ -669,16 +719,6 @@ final class AnalyzerViewModel: ObservableObject {
 
         isDidScanPausedForSpeed = false
         return false
-    }
-
-    private func didTimingProfile(rate: Double) -> (setup: [String], restore: [String], name: String) {
-        if rate >= 8.0 {
-            return (["ATAT2", "ATST0F"], ["ATAT1", "ATST32"], "高速")
-        }
-        if rate >= 5.0 {
-            return (["ATAT2", "ATST19"], ["ATAT1", "ATST32"], "中速")
-        }
-        return ([], [], "標準")
     }
 
     private func readScanSpeed() async throws -> Double? {
