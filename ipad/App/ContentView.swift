@@ -17,7 +17,8 @@ struct ContentView: View {
                             try? await Task.sleep(nanoseconds: 5_000_000_000)
                             await MainActor.run { model.ble.stopScan() }
                         }
-                    }.disabled(model.isBusy || model.isLivePolling)
+                    }
+                    .disabled(model.isBusy || model.isLivePolling || model.isDidScanning)
 
                     ForEach(model.ble.devices) { device in
                         Button { try? model.ble.connect(to: device.id) } label: {
@@ -26,16 +27,18 @@ struct ContentView: View {
                                 Text("RSSI \(device.rssi)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        .disabled(model.isDidScanning)
                     }
                 }
 
                 Section("記録") {
                     if model.isRecording {
                         Button("記録終了") { model.stopRecording() }
+                            .disabled(model.isDidScanning)
                         Text(model.recordingFile).font(.caption).foregroundStyle(.secondary)
                     } else {
                         Button("SQLite記録開始") { model.startRecording() }
-                            .disabled(model.ble.state != "ready")
+                            .disabled(model.ble.state != "ready" || model.isDidScanning)
                         if let url = model.recordingURL {
                             ShareLink(item: url) {
                                 Label("直前のSQLiteを共有", systemImage: "square.and.arrow.up")
@@ -46,17 +49,62 @@ struct ContentView: View {
 
                 Section("ELM / 車両") {
                     Button("ELM初期化") { model.initializeELM() }
-                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling)
+                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
                     Button("既知信号を1回取得") { model.readKnownSignals() }
-                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling)
+                        .disabled(model.ble.state != "ready" || model.isBusy || model.isLivePolling || model.isDidScanning)
 
                     if model.isLivePolling {
                         Button("ライブ取得停止", role: .destructive) { model.stopLivePolling() }
                     } else {
                         Button("既知信号ライブ取得開始") { model.startLivePolling() }
-                            .disabled(model.ble.state != "ready" || model.isBusy)
+                            .disabled(model.ble.state != "ready" || model.isBusy || model.isDidScanning)
+                    }
+                }
+
+                Section("DID探索（停車のみ）") {
+                    Toggle("完全停止・Pレンジを確認", isOn: $model.stationaryConfirmed)
+
+                    HStack {
+                        Text("ECU source")
+                        TextField("01", text: $model.didScanEcu)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .multilineTextAlignment(.trailing)
                     }
 
+                    Picker("探索速度", selection: $model.didScanRateHz) {
+                        Text("2 req/s").tag(2.0)
+                        Text("5 req/s").tag(5.0)
+                        Text("8 req/s").tag(8.0)
+                        Text("10 req/s").tag(10.0)
+                    }
+
+                    Text("初期対象: 2000–20FF")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if model.isDidScanning {
+                        Button("探索を安全に停止", role: .destructive) { model.stopDidScan() }
+                    } else {
+                        Button("2000–20FF 探索 / 再開") { model.startDidScan2000Range() }
+                            .disabled(
+                                model.ble.state != "ready" ||
+                                !model.isRecording ||
+                                !model.stationaryConfirmed ||
+                                model.isBusy ||
+                                model.isLivePolling
+                            )
+                    }
+
+                    ProgressView(value: model.didScanProgress)
+                    Text(model.didScanCurrent)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Positive \(model.didPositiveCount) / partial \(model.didPartialCount)")
+                        .font(.caption)
+                }
+
+                Section("状態") {
                     Text(model.statusMessage).font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -69,6 +117,7 @@ struct ContentView: View {
                         Spacer()
                         if model.isRecording { Label("REC", systemImage: "record.circle.fill") }
                         if model.isLivePolling { Label("LIVE", systemImage: "waveform.path.ecg") }
+                        if model.isDidScanning { Label("DID", systemImage: "magnifyingglass") }
                         if model.isBusy { ProgressView() }
                     }
 
@@ -86,7 +135,33 @@ struct ContentView: View {
                         HStack {
                             ForEach(markers, id: \.self) { marker in
                                 Button(marker) { model.addMarker(marker) }
-                                    .disabled(!model.isRecording)
+                                    .disabled(!model.isRecording || model.isDidScanning)
+                            }
+                        }
+                    }
+
+                    GroupBox("Positive DID inventory") {
+                        if model.positiveDids.isEmpty {
+                            Text("まだPositive DIDは保存されていません")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(model.positiveDids.enumerated()), id: \.offset) { _, item in
+                                    HStack {
+                                        Text("ECU \(item.ecu)")
+                                            .frame(width: 70, alignment: .leading)
+                                        Text(String(format: "%04X", item.did))
+                                            .font(.system(.body, design: .monospaced))
+                                            .frame(width: 60, alignment: .leading)
+                                        Text(item.status == .positivePartial ? "部分" : "完全")
+                                            .frame(width: 50, alignment: .leading)
+                                        Text(item.responseCanID ?? "—")
+                                            .font(.system(.caption, design: .monospaced))
+                                        Spacer()
+                                        Text("\(item.payload.count) B")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -104,9 +179,11 @@ struct ContentView: View {
                                 Text("\(item.serviceUUID) / \(item.uuid) / \(item.properties.joined(separator: ", "))")
                                     .font(.caption)
                             }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }.padding()
+                }
+                .padding()
             }
         }
     }
@@ -125,7 +202,8 @@ private struct MetricCard: View {
                     Text(value).font(.system(size: 32, weight: .semibold, design: .rounded))
                     Text(unit).font(.caption).foregroundStyle(.secondary)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
