@@ -110,6 +110,15 @@ struct ContentView: View {
                         Text("10 req/s").tag(10.0)
                     }
 
+                    Toggle(
+                        "走行検出時は一時停止し、0 km/h安定後に自動再開",
+                        isOn: $model.autoResumeDidScanAfterStop
+                    )
+
+                    Text("走行中は010Dだけ監視し、DID要求は送信しません。0 km/hを3回連続確認してから再開します。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
                     Text("短時間確認: 2000–20FF / 全範囲: adaptive 0000–FFFF")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -169,7 +178,11 @@ struct ContentView: View {
                         Spacer()
                         if model.isRecording { Label("REC", systemImage: "record.circle.fill") }
                         if model.isLivePolling { Label("LIVE", systemImage: "waveform.path.ecg") }
-                        if model.isDidScanning { Label("DID", systemImage: "magnifyingglass") }
+                        if model.isDidScanPausedForSpeed {
+                            Label("DID PAUSE", systemImage: "pause.circle.fill")
+                        } else if model.isDidScanning {
+                            Label("DID", systemImage: "magnifyingglass")
+                        }
                         if model.isBusy { ProgressView() }
                     }
 
