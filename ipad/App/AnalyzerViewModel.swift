@@ -145,7 +145,7 @@ final class AnalyzerViewModel: ObservableObject {
         Task {
             do {
                 try await prepareMode01()
-                try await pollKnownCycle()
+                try await pollKnownCycle(requireComplete: true)
                 knownSignalsValidated = true
                 statusMessage = "既知信号取得完了"
             } catch {
@@ -167,7 +167,10 @@ final class AnalyzerViewModel: ObservableObject {
                 try await prepareMode01()
                 while !Task.isCancelled {
                     try await pollKnownCycle()
-                    knownSignalsValidated = true
+                    if rpm != nil && speedKmh != nil && coolantC != nil &&
+                        socPercent != nil && hvVoltage != nil && hvCurrent != nil {
+                        knownSignalsValidated = true
+                    }
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             } catch is CancellationError {
@@ -802,29 +805,55 @@ final class AnalyzerViewModel: ObservableObject {
         activeHeaderCommand = headerCommand
     }
 
-    private func pollKnownCycle() async throws {
+    private func pollKnownCycle(requireComplete: Bool = false) async throws {
         let rpmResult = try await session.command("010C")
         append(rpmResult)
-        rpm = decodeEngineRPM(rpmResult.text)
+        let rpmValue = decodeEngineRPM(rpmResult.text)
 
         let speedResult = try await session.command("010D")
         append(speedResult)
-        speedKmh = decodeVehicleSpeed(speedResult.text)
+        let speedValue = decodeVehicleSpeed(speedResult.text)
 
         let coolantResult = try await session.command("0105")
         append(coolantResult)
-        coolantC = decodeCoolantC(coolantResult.text)
+        let coolantValue = decodeCoolantC(coolantResult.text)
 
         let socResult = try await session.command("015B")
         append(socResult)
-        socPercent = decodeBatterySOC(socResult.text)
+        let socValue = decodeBatterySOC(socResult.text)
 
         let hybridResult = try await session.command("019A")
         append(hybridResult)
-        if let hybrid = decodeHybridEv9A(hybridResult.text) {
-            hvVoltage = hybrid.voltageV
-            hvCurrent = hybrid.currentA
-            hvPowerKW = hybrid.powerKW
+        let hybridValue = decodeHybridEv9A(hybridResult.text)
+
+        if requireComplete {
+            let complete =
+                rpmResult.success && rpmValue != nil &&
+                speedResult.success && speedValue != nil &&
+                coolantResult.success && coolantValue != nil &&
+                socResult.success && socValue != nil &&
+                hybridResult.success && hybridValue != nil
+
+            guard complete else {
+                throw NSError(
+                    domain: "HondaAnalyzer.KnownSignals",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "既知信号の確認に失敗しました。RPM/車速/水温/SOC/HV 9Aの全項目が有効にdecodeできる必要があります。"
+                    ]
+                )
+            }
+        }
+
+        rpm = rpmValue
+        speedKmh = speedValue
+        coolantC = coolantValue
+        socPercent = socValue
+        if let hybridValue {
+            hvVoltage = hybridValue.voltageV
+            hvCurrent = hybridValue.currentA
+            hvPowerKW = hybridValue.powerKW
         }
     }
 
