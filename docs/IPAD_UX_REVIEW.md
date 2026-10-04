@@ -120,9 +120,16 @@ Important states must be independently testable:
 
 ## Remaining UX work
 
-1. Validate the new guided workflow on a physical iPad in portrait and landscape.
-2. Consider a session summary/export screen after recording stops.
-3. Add explicit error recovery actions for BLE/GATT/ELM failures instead of relying only on status text.
-4. Consider retaining the last successfully used KW905 and offering a clear one-tap reconnect path.
-5. Validate Dynamic Type and VoiceOver labels.
-6. Continue reducing technical detail in the primary path without hiding the evidence/debug path.
+Completed in the implementation pass:
+- dedicated session finish/export panel,
+- BLE/GATT connection failure recovery actions,
+- adaptive dashboard / split-view layouts,
+- Dynamic Type-friendly primary metric typography,
+- VoiceOver labels for BLE device rows and primary metrics,
+- technical information moved out of the primary dashboard path.
+
+Still requiring follow-up:
+1. Validate the redesigned workspace on a physical iPad in portrait, landscape, and Split View.
+2. Validate VoiceOver end-to-end on hardware.
+3. Consider retaining the last successfully used KW905 and offering a one-tap reconnect path.
+4. Extend the Sessions page from file management to offline replay/session summary when the iPad-native analysis backend is ready.
