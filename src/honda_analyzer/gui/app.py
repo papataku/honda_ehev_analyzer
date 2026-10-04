@@ -37,6 +37,7 @@ from honda_analyzer.gui.ecu_discovery import EcuDiscoveryWidget
 from honda_analyzer.gui.guide_widgets import guide_box
 from honda_analyzer.gui.page_guides import PAGE_GUIDES, RECOMMENDED_FLOW
 from honda_analyzer.gui.layout_policy import recommended_window_size
+from honda_analyzer.gui.operation_gate import OperationGate
 from honda_analyzer.analysis.payload_workspace import command_payloads, differential, activity, heatmap_data, expanded_candidates
 from honda_analyzer.analysis.field_correlation import analyze_field, field_series, align_nearest
 from honda_analyzer.analysis.response_inventory import diagnostic_response_inventory
@@ -83,6 +84,7 @@ class MainWindow(QMainWindow):
         self.session = None
         self.adapter_ready = False
         self.readiness_passed = False
+        self.connection_gate = OperationGate()
         self.writer = None
         self.analysis_sid = None
         self.scan_rssi = {}
@@ -377,13 +379,32 @@ class MainWindow(QMainWindow):
             try:self.writer.add_ui_action(self.sid,UTC(),str(action),None if detail is None else str(detail))
             except Exception:pass
 
+    def _begin_connection_operation(self, name):
+        name=str(name)
+        if self.connection_gate.begin(name):
+            self._ui_action('connection_operation_start',name)
+            self._refresh_ui_state()
+            return True
+        active=self.connection_gate.current or '別の処理'
+        self._ui_action('connection_operation_blocked',f'requested={name} active={active}')
+        self.status.setText(f'接続・準備の「{active}」を実行中です。完了後にもう一度操作してください。')
+        self._refresh_ui_state()
+        return False
+
+    def _end_connection_operation(self, name):
+        if self.connection_gate.end(str(name)):
+            self._ui_action('connection_operation_end',str(name))
+        self._refresh_ui_state()
+
     def _refresh_ui_state(self, *_args):
         selected = self.devices.currentData() is not None
         connected = self.session is not None and self.transport is not None
         scan_running = self.did_discovery_task is not None and not self.did_discovery_task.done()
-        self.readiness_btn.setEnabled(selected and not connected and not scan_running)
-        self.connect_btn.setEnabled(selected and not connected and not scan_running)
-        self.disconnect_btn.setEnabled(connected)
+        connection_busy = self.connection_gate.busy
+        self.scan_btn.setEnabled(not connected and not scan_running and not connection_busy)
+        self.readiness_btn.setEnabled(selected and not connected and not scan_running and not connection_busy)
+        self.connect_btn.setEnabled(selected and not connected and not scan_running and not connection_busy)
+        self.disconnect_btn.setEnabled(connected and not connection_busy)
         can_start = connected and self.adapter_ready and not self.live_polling and self.sid is not None and not scan_running
         self.poll_start.setEnabled(can_start)
         self.poll_stop.setEnabled(self.live_polling)
@@ -1008,15 +1029,20 @@ class MainWindow(QMainWindow):
             self._flush_writer()
             positives=self.db.positive_did_inventory(ecus); self.ecu_discovery.show_positive_dids(self.db.positive_did_inventory_detailed(ecus))
             stopped_speed=next((x for x in rows if x.status=='stopped_speed'),None)
+            consecutive_error=len(rows) >= 5 and all(x.status=='error' for x in rows[-5:])
             if stopped_speed:
+                stop_reason='speed_safety'; stop_detail=stopped_speed.raw_text
                 self.ecu_discovery.did_status.setText('安全停止：車速が0 km/hと確認できなくなったためDID探索を停止しました。保存済み結果は残っています。')
             elif self.did_discovery_stop:
+                stop_reason='user'; stop_detail='manual stop requested'
                 self.ecu_discovery.did_status.setText(f'探索を停止しました。Positive DIDは現在 {len(positives)}件。次回「開始 / 続きから再開」で確認済みDIDを飛ばして続けられます。')
-            elif len(rows) >= 5 and all(x.status=='error' for x in rows[-5:]):
+            elif consecutive_error:
+                stop_reason='consecutive_error'; stop_detail='five consecutive infrastructure errors'
                 self.ecu_discovery.did_status.setText('安全停止：通信/ヘッダ設定エラーが5回連続したため、同じ失敗を大量送信しないよう探索を止めました。ログを確認してから再開してください。')
             else:
+                stop_reason='complete'; stop_detail='requested range completed'
                 self.ecu_discovery.did_status.setText(f'指定範囲の探索が終了しました。保存済みPositive DID：{len(positives)}件。')
-            self._ui_action('did_discovery_end',f'rows={len(rows)} positives={len(positives)} stopped={self.did_discovery_stop}')
+            self._ui_action('did_discovery_end',f'rows={len(rows)} positives={len(positives)} stop_reason={stop_reason} detail={stop_detail}')
         except Exception as e:
             self.ecu_discovery.did_status.setText(f'DID探索を中止しました：{type(e).__name__}: {e}。取得済み結果は保存されています。')
             self._ui_action('did_discovery_error',f'{type(e).__name__}: {e}')
@@ -1112,6 +1138,8 @@ class MainWindow(QMainWindow):
         self.refresh_sessions(); self.status.setText(final_message); self._refresh_ui_state()
 
     async def do_scan(self):
+        op='BLE機器検索'
+        if not self._begin_connection_operation(op):return
         self._ui_action('ble_scan_pressed')
         self.devices.clear(); self.status.setText('BLE機器を検索しています…'); self.connection_next.setText('検索中です。数秒後に一覧からKW905を選んでください。')
         try:
@@ -1119,29 +1147,40 @@ class MainWindow(QMainWindow):
             for d in await scan_devices():
                 self.devices.addItem(f'{d.name or "名前不明"}  {d.identifier}',d.identifier); self.scan_rssi[d.identifier]=d.rssi
             self._ui_action('ble_scan_result',f'count={self.devices.count()}'); self.status.setText(f'BLE機器を {self.devices.count()} 件見つけました')
-        except Exception as e:self._ui_action('ble_scan_error',f'{type(e).__name__}: {e}'); self.status.setText(f'BLE検索エラー：{e}')
-        self._refresh_ui_state()
+        except Exception as e:
+            self._ui_action('ble_scan_error',f'{type(e).__name__}: {e}'); self.status.setText(f'BLE検索エラー：{e}')
+        finally:
+            self._end_connection_operation(op)
 
     async def do_connect(self):
         did=self.devices.currentData()
         self._ui_action('connect_pressed',f'device={did}')
         if not did:self.status.setText('先にBLE機器を検索し、KW905を選択してください。'); return
-        self.current_rssi=self.scan_rssi.get(did); self.last_vehicle_speed=None; self.transport=KW905BleTransport(did,raw_hook=self.raw_observation)
+        op='KW905接続'
+        if not self._begin_connection_operation(op):return
+        self.current_rssi=self.scan_rssi.get(did); self.last_vehicle_speed=None
+        transport=KW905BleTransport(did,raw_hook=self.raw_observation)
+        self.transport=transport; self.session=None; self.adapter_ready=False
         self.status.setText('KW905へ接続し、ELM327を初期化しています…')
         try:
-            await self.transport.connect(); self.session=ElmSession(self.transport); self.gatt.clear(); services={}
-            for c in self.transport.gatt:
-                p=services.setdefault(c.service_uuid,QTreeWidgetItem(self.gatt,[c.service_uuid,''])); QTreeWidgetItem(p,[c.uuid,', '.join(c.properties)])
-            meta={'write_char':self.transport.write_char,'notify_char':self.transport.notify_char,'mtu_size':self.transport.mtu_size,'scan_rssi_dbm':self.current_rssi,'gatt':[{'service':c.service_uuid,'uuid':c.uuid,'properties':c.properties} for c in self.transport.gatt]}
+            await transport.connect(); session=ElmSession(transport); self.session=session; self.gatt.clear(); services={}
+            for ch in transport.gatt:
+                p=services.setdefault(ch.service_uuid,QTreeWidgetItem(self.gatt,[ch.service_uuid,''])); QTreeWidgetItem(p,[ch.uuid,', '.join(ch.properties)])
+            meta={'write_char':transport.write_char,'notify_char':transport.notify_char,'mtu_size':transport.mtu_size,'scan_rssi_dbm':self.current_rssi,'gatt':[{'service':ch.service_uuid,'uuid':ch.uuid,'properties':ch.properties} for ch in transport.gatt]}
             if self.sid:self._persist('add_device',self.sid,'BLE',did,meta)
-            results=await initialize(self.session)
+            results=await initialize(session)
             for r in results:self.record_response(r.command,r)
             self.adapter_ready=all(r.success for r in results[:9]); self.active_header=None; self.active_can_priority=None
-            if self.adapter_ready:self._ui_action('connect_result',f'OK mtu={self.transport.mtu_size}'); self.status.setText(f'KW905接続OK。ELM初期化OK。MTU={self.transport.mtu_size}。「2. ライブ表示」へ進めます。')
+            if self.adapter_ready:self._ui_action('connect_result',f'OK mtu={transport.mtu_size}'); self.status.setText(f'KW905接続OK。ELM初期化OK。MTU={transport.mtu_size}。「2. ライブ表示」へ進めます。')
             else:self._ui_action('connect_result','ELM initialization failed'); self.status.setText('KW905には接続しましたがELM初期化に失敗しました。切断して再接続してください。')
         except Exception as e:
-            self._ui_action('connect_error',f'{type(e).__name__}: {e}'); self.status.setText(f'接続失敗：{e}'); self.transport=None; self.session=None; self.adapter_ready=False
-        self._refresh_ui_state()
+            self._ui_action('connect_error',f'{type(e).__name__}: {e}'); self.status.setText(f'接続失敗：{e}')
+            try:await transport.disconnect()
+            except Exception:pass
+            if self.transport is transport:
+                self.transport=None; self.session=None; self.adapter_ready=False
+        finally:
+            self._end_connection_operation(op)
 
     def record_response(self,command,r,success_override=None):
         self.term.appendPlainText(f'> {command}  [{r.latency_ms:.1f} ms]\n{r.text}')
@@ -1168,27 +1207,33 @@ class MainWindow(QMainWindow):
         did=self.devices.currentData()
         self._ui_action('readiness_pressed',f'device={did}')
         if not did:self.status.setText('先にBLE機器を検索し、KW905を選択してください。'); return
+        op='実車準備テスト'
+        if not self._begin_connection_operation(op):return
         if self.transport:
             try:await self.transport.disconnect()
             except Exception:pass
-        self.current_rssi=self.scan_rssi.get(did); self.transport=KW905BleTransport(did,raw_hook=self.raw_observation); self.transport.scan_rssi_dbm=self.current_rssi
-        self.session=None; self.adapter_ready=False; self.status.setText('実車準備テスト中です。読取りのみで、DID総当たりは行いません…'); self._refresh_ui_state()
+        self.current_rssi=self.scan_rssi.get(did)
+        transport=KW905BleTransport(did,raw_hook=self.raw_observation); transport.scan_rssi_dbm=self.current_rssi
+        self.transport=transport; self.session=None; self.adapter_ready=False; self.status.setText('実車準備テスト中です。読取りのみで、DID総当たりは行いません…'); self._refresh_ui_state()
         try:
-            report=await run_vehicle_readiness(self.transport,db=self.writer,session_id=self.sid); self._mark_session_dirty(); self._flush_writer(); self._ui_action('readiness_result',f'overall={report.overall}')
+            report=await run_vehicle_readiness(transport,db=self.writer,session_id=self.sid); self._mark_session_dirty(); self._flush_writer(); self._ui_action('readiness_result',f'overall={report.overall}')
             root=Path.home()/'.honda-ehev-analyzer'/'readiness'; root.mkdir(parents=True,exist_ok=True)
             stamp=datetime.now().strftime('%Y%m%d-%H%M%S'); jp=root/f'readiness-{stamp}.json'; hp=root/f'readiness-{stamp}.html'
             report.write_json(jp); report.write_html(hp)
             self.term.appendPlainText('\n=== VEHICLE READINESS ===')
-            for c in report.checks:self.term.appendPlainText(f'{c.status:4} {c.name}: {c.detail}')
+            for chk in report.checks:self.term.appendPlainText(f'{chk.status:4} {chk.name}: {chk.detail}')
             self.term.appendPlainText(f'Report: {hp}')
             if report.overall=='PASS':
                 self.readiness_passed=True
                 self.status.setText(f'実車準備テスト：PASS。次に「③ KW905へ接続」を押してください。レポート：{hp}')
             elif report.overall=='WARN':self.status.setText(f'実車準備テスト：WARN。内容を保存しました。次に必要なら再確認してください。レポート：{hp}')
             else:self.status.setText(f'実車準備テスト：FAIL。ライブ取得は開始せず、上級者端末のログを確認してください。レポート：{hp}')
-        except Exception as e:self._ui_action('readiness_error',f'{type(e).__name__}: {e}'); self.status.setText(f'実車準備テスト失敗：{type(e).__name__}: {e}')
+        except Exception as e:
+            self._ui_action('readiness_error',f'{type(e).__name__}: {e}'); self.status.setText(f'実車準備テスト失敗：{type(e).__name__}: {e}')
         finally:
-            self.transport=None; self.session=None; self.adapter_ready=False; self._refresh_ui_state()
+            if self.transport is transport:
+                self.transport=None; self.session=None; self.adapter_ready=False
+            self._end_connection_operation(op)
 
     async def do_disconnect(self):
         self._ui_action('disconnect_pressed')
