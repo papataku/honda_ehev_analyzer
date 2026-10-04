@@ -22,7 +22,10 @@ targets:
         outputFiles:
           - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
         script: |
-          xcrun swift "$SRCROOT/Tools/GenerateAppIcon.swift" "$SRCROOT/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+          env -u SDKROOT -u PLATFORM_NAME -u EFFECTIVE_PLATFORM_NAME \
+            xcrun --sdk macosx swift \
+            "$SRCROOT/Tools/GenerateAppIcon.swift" \
+            "$SRCROOT/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.papataku.HondaAnalyzer
