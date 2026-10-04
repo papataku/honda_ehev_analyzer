@@ -126,4 +126,49 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(results.first?.command, "010D")
     }
 
+    func testUDS22ClassifierMatchesExpectedResponder() {
+        let positive = classifyUDS22Text(
+            "18DAF10106622012AABBCC\r>",
+            ecu: "01",
+            did: 0x2012,
+            latencyMs: 12.5
+        )
+        XCTAssertEqual(positive.status, .positive)
+        XCTAssertEqual(positive.payload, Data([0xAA, 0xBB, 0xCC]))
+        XCTAssertEqual(positive.responseCanID, "18DAF101")
+
+        let negative = classifyUDS22Text(
+            "18DAF101037F2231\r>",
+            ecu: "01",
+            did: 0x2013
+        )
+        XCTAssertEqual(negative.status, .nrc)
+        XCTAssertEqual(negative.nrc, 0x31)
+    }
+
+    func testUDS22ClassifierPreservesPartialPositive() {
+        let text = """
+        18DAF101101062201901020304
+        18DAF1012105060708090A0B
+        BUFFER FULL
+        >
+        """
+        let outcome = classifyUDS22Text(text, ecu: "01", did: 0x2019)
+        XCTAssertEqual(outcome.status, .positivePartial)
+        XCTAssertEqual(outcome.responseCanID, "18DAF101")
+        XCTAssertEqual(outcome.payload.prefix(3), Data([0x01, 0x02, 0x03]))
+    }
+
+    func testUDS22ClassifierIgnoresWrongResponder() {
+        let outcome = classifyUDS22Text(
+            "18DAF10206622012AABBCC\r>",
+            ecu: "01",
+            did: 0x2012
+        )
+        XCTAssertEqual(outcome.status, .error)
+        XCTAssertEqual(expectedResponseID(for: "01"), "18DAF101")
+        XCTAssertEqual(physicalRequestID(for: "01"), "18DA01F1")
+        XCTAssertEqual(physicalRequestHeaderCommand(for: "01"), "ATSHDA01F1")
+    }
+
 }
