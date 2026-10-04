@@ -153,6 +153,26 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
+    public func promoteLatestCommandSuccess(sessionID: Int64, command: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let s = try self.prepare("""
+                UPDATE commands SET success=1
+                WHERE id=(
+                    SELECT id FROM commands
+                    WHERE session_id=? AND REPLACE(UPPER(command),' ','')=REPLACE(UPPER(?),' ','')
+                    ORDER BY id DESC LIMIT 1
+                )
+                """)
+                defer { sqlite3_finalize(s) }
+                sqlite3_bind_int64(s, 1, sessionID)
+                self.bindText(s, 2, command)
+                try self.stepDone(s)
+            } catch { self.report(error) }
+        }
+    }
+
     public func completedDids(ecu: String, start: UInt16, end: UInt16) throws -> Set<UInt16> {
         try queue.sync {
             let s = try prepare("""
