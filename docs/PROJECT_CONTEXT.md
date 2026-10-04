@@ -74,6 +74,20 @@ In the v0.3.3-era capture, six were complete and eleven produced long responses 
 
 This list is evidence from a particular scan state; it is not a declaration that these are the only valid DIDs.
 
+## Session 16 evidence (2026-10-04)
+
+Session 16 materially expanded the read-only Positive DID inventory. The exported scan contains 62 complete Positive and 13 partial-Positive rows; the application reported 81 Positive/partial-Positive DIDs in the cumulative cross-session inventory after the scan.
+
+Most importantly, ECU source `0E` exposed a large cluster in the `0x2200` and `0x2600` regions, plus partial long responses at `26A0/26A1`. ECU source `EF` returned complete Positive data for `C000` and `C020`. These are responder-source identifiers only; do not assign human-readable ECU names without independent evidence.
+
+The long-response workaround behaved safely: `ATH0` compact retry often increased the preserved payload prefix but did not fully recover the Session-16 long responses. Continue storing them as `positive_partial`; never synthesize missing bytes.
+
+The periodic `010D` guard also stopped two discovery attempts at measured speeds of 13 km/h and 5 km/h, validating stationary-only discovery on the real vehicle.
+
+DID `2012` byte 5 again tracked standard PID `5B` SOC extremely closely in the available aligned samples (Pearson about 0.9985, MAE about 0.39 percentage points), independently reinforcing the SOC-mirror hypothesis.
+
+The bundle contains only 30 DID drive samples and none for the newly discovered 0E/EF inventory, so it is not sufficient to identify traction motor/generator RPM. The next evidence priority is a longer drive sweep using the expanded Positive inventory. See `docs/SESSION16_ANALYSIS.md`.
+
 ## DID discovery requirements
 - Automated unknown discovery is UDS `0x22` only.
 - Scan only while stationary; speed is rechecked during the scan.
