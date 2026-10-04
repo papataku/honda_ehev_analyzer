@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import HondaAnalyzerCore
 
 enum AnalyzerSection: String, CaseIterable, Identifiable {
@@ -157,6 +158,24 @@ private struct DashboardPage: View {
                     DashboardMetric(title: "HV VOLTAGE", value: model.hvVoltage.map { String(format: "%.1f", $0) } ?? "--", unit: "V", symbol: "bolt.fill")
                     DashboardMetric(title: "HV CURRENT", value: model.hvCurrent.map { String(format: "%.1f", $0) } ?? "--", unit: "A", symbol: "arrow.up.arrow.down")
                     DashboardMetric(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW", symbol: "waveform.path.ecg")
+                }
+
+                if model.liveSamples.count >= 2 {
+                    HStack(alignment: .top, spacing: 12) {
+                        LiveTrendCard(
+                            title: "RPM trend",
+                            unit: "rpm",
+                            samples: model.liveSamples,
+                            value: { $0.rpm }
+                        )
+
+                        LiveTrendCard(
+                            title: "HV Power trend",
+                            unit: "kW",
+                            samples: model.liveSamples,
+                            value: { $0.hvPowerKW }
+                        )
+                    }
                 }
 
                 if model.isRecording {
@@ -662,6 +681,31 @@ private struct DashboardMetric: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title) \(value) \(unit)")
+    }
+}
+
+private struct LiveTrendCard: View {
+    let title: String
+    let unit: String
+    let samples: [LiveSignalSample]
+    let value: (LiveSignalSample) -> Double?
+
+    var body: some View {
+        AnalyzerCard(title, systemImage: "chart.xyaxis.line") {
+            Chart {
+                ForEach(samples) { sample in
+                    if let y = value(sample) {
+                        LineMark(
+                            x: .value("Time", sample.date),
+                            y: .value(unit, y)
+                        )
+                        .interpolationMethod(.catmullRom)
+                    }
+                }
+            }
+            .chartXAxis(.hidden)
+            .frame(height: 150)
+        }
     }
 }
 
