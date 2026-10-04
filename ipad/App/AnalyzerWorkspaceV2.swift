@@ -789,7 +789,11 @@ private struct FlowLayout<Content: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: spacing) {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 120), spacing: spacing)],
+            alignment: .leading,
+            spacing: spacing
+        ) {
             content
         }
     }
