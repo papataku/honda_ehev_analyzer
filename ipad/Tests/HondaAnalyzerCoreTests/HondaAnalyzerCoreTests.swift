@@ -395,4 +395,20 @@ final class HondaAnalyzerCoreTests: XCTestCase {
     }
 #endif
 
+    func testCaptureTimestampPreservesFractionalSeconds() {
+        let date = Date(timeIntervalSince1970: 1_700_000_000.123)
+        let text = captureTimestamp(date)
+        XCTAssertTrue(text.contains("."))
+        XCTAssertTrue(text.hasSuffix("Z"))
+        XCTAssertNotNil(ISO8601DateFormatter.fractional.date(from: text))
+    }
+
+}
+
+private extension ISO8601DateFormatter {
+    static var fractional: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }
 }
