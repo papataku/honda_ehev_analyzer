@@ -272,3 +272,49 @@ struct VehicleSafetyBanner: View {
         }
     }
 }
+
+
+struct SessionExportPanel: View {
+    @ObservedObject var model: AnalyzerViewModel
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("セッション終了・ログ共有", systemImage: "square.and.arrow.up")
+                    .font(.headline)
+
+                if model.isRecording {
+                    if model.isLivePolling || model.isDidScanning || model.isBusy {
+                        Text("取得処理を停止してからSQLite記録を終了してください。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("取得が終わったら記録を正常終了し、その後SQLiteを共有できます。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button("SQLite記録を終了") {
+                        model.stopRecording()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isLivePolling || model.isDidScanning || model.isBusy)
+                } else if let url = model.recordingURL {
+                    Text("記録は正常終了しています。Macでの詳細解析や共有用にSQLiteを渡せます。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ShareLink(item: url) {
+                        Label("直前のSQLiteを共有", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Text("記録を開始すると、ここに終了・共有操作が表示されます。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
