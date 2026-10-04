@@ -108,3 +108,15 @@ With **走行検出時は一時停止し、0 km/h安定後に自動再開** enab
 - pause/resume is recorded in SQLite events.
 
 Turning the option off preserves the conservative behavior: motion ends the current scan and a later scan must be started manually.
+
+
+## Bluetooth connection screen
+
+The iPad app now starts with a dedicated BLE connection screen instead of placing every discovered peripheral in the analyzer sidebar.
+
+- Left pane: scan controls, connection state, filters.
+- Right pane: large selectable device rows with name, UUID and RSSI.
+- **名前なしを除外** is enabled by default because the expected KW905 advertises a name.
+- An optional name search field further narrows the list.
+- When the selected device reaches BLE `ready`, the app automatically opens the analyzer workspace.
+- The analyzer sidebar keeps only the current connection summary and a button to return to the Bluetooth connection screen; discovered-device rows no longer expand that sidebar.
