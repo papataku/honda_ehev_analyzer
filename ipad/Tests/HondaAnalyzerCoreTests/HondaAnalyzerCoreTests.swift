@@ -294,4 +294,52 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         }
     }
 
+    func testAdaptiveDidStrategyMatchesMacOrderingPrimitives() {
+        XCTAssertEqual(
+            didKnownPriority(start: 0x1F00, end: 0x2100).first,
+            UInt16(0x2000)
+        )
+        XCTAssertEqual(
+            didKnownPriority(start: 0x1F00, end: 0x2100).last,
+            UInt16(0x20FF)
+        )
+
+        let heads = didSectorHeads(start: 0x0000, end: 0xFFFF, width: 4)
+        XCTAssertEqual(heads.count, 64)
+        XCTAssertEqual(Array(heads.prefix(4)), [0x0000, 0x0001, 0x0002, 0x0003])
+        XCTAssertEqual(Array(heads.suffix(4)), [0xF000, 0xF001, 0xF002, 0xF003])
+
+        let sentinels = didPageSentinels(
+            sector: 2,
+            start: 0x2000,
+            end: 0x22FF
+        )
+        XCTAssertEqual(
+            sentinels,
+            [0x2000, 0x2080, 0x2100, 0x2180, 0x2200, 0x2280]
+        )
+    }
+
+    func testAdaptiveDidStrategyPrioritizesEvidenceButNeverChangesCoverage() {
+        let sectorScores = [2: 200, 0: 0, 1: 100]
+        XCTAssertEqual(
+            didPrioritizedSectors(start: 0x0000, end: 0x2FFF, scores: sectorScores),
+            [2, 1, 0]
+        )
+
+        let pageScores = [0x22: 100, 0x20: 300, 0x21: 200]
+        XCTAssertEqual(
+            didPrioritizedPages(sector: 2, start: 0x2000, end: 0x22FF, scores: pageScores),
+            [0x20, 0x21, 0x22]
+        )
+
+        XCTAssertEqual(didOutcomeInterestScore(status: .positive, nrc: nil), 100)
+        XCTAssertEqual(didOutcomeInterestScore(status: .positivePartial, nrc: nil), 100)
+        XCTAssertEqual(didOutcomeInterestScore(status: .nrc, nrc: 0x22), 25)
+        XCTAssertEqual(didOutcomeInterestScore(status: .nrc, nrc: 0x31), 0)
+        XCTAssertEqual(didEstimatedScanSeconds(
+            ecuCount: 1, start: 0x0000, end: 0xFFFF, rateHz: 10
+        ), 6553.6, accuracy: 0.001)
+    }
+
 }
