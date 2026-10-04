@@ -44,6 +44,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var hvCurrent: Double?
     @Published var hvPowerKW: Double?
     @Published var transcript: [String] = []
+    @Published var liveSamples: [LiveSignalSample] = []
 
     init() {
         let transport = KW905BLETransport()
@@ -855,6 +856,18 @@ final class AnalyzerViewModel: ObservableObject {
             hvVoltage = hybridValue.voltageV
             hvCurrent = hybridValue.currentA
             hvPowerKW = hybridValue.powerKW
+        }
+
+        liveSamples.append(
+            LiveSignalSample(
+                date: Date(),
+                rpm: rpmValue,
+                speedKmh: speedValue.map(Double.init),
+                hvPowerKW: hybridValue?.powerKW
+            )
+        )
+        if liveSamples.count > 120 {
+            liveSamples.removeFirst(liveSamples.count - 120)
         }
     }
 
