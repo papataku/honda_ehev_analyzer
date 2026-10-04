@@ -13,8 +13,11 @@ final class AnalyzerViewModel: ObservableObject {
     private var didScanStopRequested = false
     private var activeHeaderCommand: String?
     private var bleObservation: AnyCancellable?
+    private var bleStateObservation: AnyCancellable?
 
     @Published var isBusy = false
+    @Published var elmInitialized = false
+    @Published var knownSignalsValidated = false
     @Published var isLivePolling = false
     @Published var isDidScanning = false
     @Published var isDidScanPausedForSpeed = false
@@ -50,6 +53,15 @@ final class AnalyzerViewModel: ObservableObject {
         session.onResult = { [weak self] result in self?.recordCommand(result) }
         bleObservation = transport.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
+        }
+        bleStateObservation = transport.$state.sink { [weak self] state in
+            guard let self else { return }
+            if state == "connecting" || state == "disconnected" ||
+                state == "connect-failed" || state == "gatt-error" ||
+                state == "bluetooth-unavailable" {
+                self.elmInitialized = false
+                self.knownSignalsValidated = false
+            }
         }
     }
 
@@ -113,6 +125,8 @@ final class AnalyzerViewModel: ObservableObject {
             activeHeaderCommand = nil
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
+            elmInitialized = failed.isEmpty
+            if !elmInitialized { knownSignalsValidated = false }
             statusMessage = failed.isEmpty ? "ELM初期化完了" : "ELM初期化完了（失敗 \(failed.count)件）"
             isBusy = false
         }
@@ -126,6 +140,7 @@ final class AnalyzerViewModel: ObservableObject {
             do {
                 try await prepareMode01()
                 try await pollKnownCycle()
+                knownSignalsValidated = true
                 statusMessage = "既知信号取得完了"
             } catch {
                 statusMessage = "取得失敗: \(error.localizedDescription)"
@@ -146,6 +161,7 @@ final class AnalyzerViewModel: ObservableObject {
                 try await prepareMode01()
                 while !Task.isCancelled {
                     try await pollKnownCycle()
+                    knownSignalsValidated = true
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             } catch is CancellationError {
