@@ -901,10 +901,8 @@ final class AnalyzerViewModel: ObservableObject {
         }
 
         var tracker = StationaryResumeTracker(requiredZeroSamples: 3)
-        let knownCandidates = loadDriveDIDCandidates(
-            from: captureDatabaseURLs(), limit: 24
-        )
-        var candidateIndex = 0
+        let knownCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs())
+        let scheduler = schedulerFor(knownCandidates)
         var monitoringIndex = 0
         store.saveDrivePlan(sessionID: sessionID, at: Date(), candidates: knownCandidates)
         store.addEvent(
@@ -941,15 +939,16 @@ final class AnalyzerViewModel: ObservableObject {
 
             if let speed, speed > 0 {
                 stationaryConfirmed = false
-                if !knownCandidates.isEmpty {
-                    let candidate = knownCandidates[candidateIndex % knownCandidates.count]
-                    candidateIndex += 1
+                if let candidate = scheduler.next(
+                    now: Date(), context: drivingContext
+                ) {
                     let outcome = await sampleKnownDrivingDID(candidate)
-                    if outcome.status == .positive {
-                        store.saveDriveSample(sessionID: sessionID, at: Date(), outcome: outcome)
-                        driveCollectedCount += 1
-                    }
-                    didScanCurrent = "走行解析 \(candidate.label) / \(driveCollectedCount)件"
+                    _ = recordAdaptiveDriveSample(
+                        candidate, outcome: outcome, scheduler: scheduler,
+                        store: store, sessionID: sessionID
+                    )
+                    didScanCurrent = "走行解析 \(candidate.label) / \(driveCollectedCount)件" +
+                        "（低頻度確認 \(driveSamplingSummary.dormant)件）"
                 }
 
                 // Refresh correlated references while moving, not unknown DIDs.
