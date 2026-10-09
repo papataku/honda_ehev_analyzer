@@ -815,11 +815,22 @@ final class AnalyzerViewModel: ObservableObject {
                             driveCurrent = "\(candidate.label) / \(driveCollectedCount)件保存 / " +
                                 "\(driveSamplingSummary.dormant)件は低頻度再確認"
                             if consecutiveTransportErrors >= 12 {
-                                throw NSError(
-                                    domain: "HondaAnalyzer.DriveCapture", code: 1,
-                                    userInfo: [NSLocalizedDescriptionKey:
-                                        "連続12回の応答失敗。アダプタ/ECU状態の確認が必要です"]
+                                // Historical responders may disappear or reject a
+                                // request in a new session. Back off each DID,
+                                // without aborting sampling of other ECU sources.
+                                if ble.state != "ready" {
+                                    throw NSError(
+                                        domain: "HondaAnalyzer.DriveCapture", code: 1,
+                                        userInfo: [NSLocalizedDescriptionKey:
+                                            "BLE切断により解析を停止しました"]
+                                    )
+                                }
+                                store.addEvent(
+                                    sessionID: sid, at: Date(),
+                                    kind: "DRIVE_DID_RETRY_BACKOFF",
+                                    note: "12 consecutive failures; individual DID retries remain scheduled"
                                 )
+                                consecutiveTransportErrors = 0
                             }
                         }
                     } else {
