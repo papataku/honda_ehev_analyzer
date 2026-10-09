@@ -41,6 +41,12 @@ public final class CaptureStore: @unchecked Sendable {
     CREATE TABLE IF NOT EXISTS did_scan(id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, ecu TEXT NOT NULL, did INTEGER NOT NULL, status TEXT NOT NULL, latency_ms REAL, nrc INTEGER, payload BLOB, response_can_id TEXT, updated_utc TEXT NOT NULL, UNIQUE(session_id,ecu,did));
     CREATE INDEX IF NOT EXISTS idx_did_scan_resume ON did_scan(session_id,ecu,status,did);
     CREATE TABLE IF NOT EXISTS did_drive_plan(session_id INTEGER NOT NULL, ecu TEXT NOT NULL, did INTEGER NOT NULL, discovered_session_id INTEGER, created_utc TEXT NOT NULL, PRIMARY KEY(session_id,ecu,did));
+    CREATE TABLE IF NOT EXISTS did_drive_adaptive_state(
+        session_id INTEGER NOT NULL, ecu TEXT NOT NULL, did INTEGER NOT NULL,
+        priority TEXT NOT NULL, last_payload BLOB, unchanged INTEGER NOT NULL,
+        contexts TEXT NOT NULL, updated_utc TEXT NOT NULL,
+        PRIMARY KEY(session_id,ecu,did)
+    );
     CREATE TABLE IF NOT EXISTS did_drive_samples(id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, ts_utc TEXT NOT NULL, ecu TEXT NOT NULL, did INTEGER NOT NULL, response_can_id TEXT, payload BLOB NOT NULL, latency_ms REAL, success INTEGER NOT NULL DEFAULT 1, partial INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS idx_did_drive_samples ON did_drive_samples(session_id,ecu,did,ts_utc);
     """
@@ -203,6 +209,48 @@ public final class CaptureStore: @unchecked Sendable {
                         sqlite3_bind_int64(s, 3, Int64(candidate.did))
                         self.bindText(s, 4, self.timestamp(date))
                         try self.stepDone(s)
+                    }
+                    try self.execute("COMMIT")
+                } catch {
+                    try? self.execute("ROLLBACK")
+                    throw error
+                }
+            } catch { self.report(error) }
+        }
+    }
+
+    /// One transactional snapshot per checkpoint/stop, not one disk commit per DID.
+    public func saveDriveSamplingState(
+        sessionID: Int64, at date: Date, seeds: [DriveSamplingSeed]
+    ) {
+        queue.async { [weak self] in
+            guard let self, !seeds.isEmpty else { return }
+            do {
+                try self.execute("BEGIN IMMEDIATE")
+                do {
+                    let statement = try self.prepare("""
+                        INSERT OR REPLACE INTO did_drive_adaptive_state(
+                            session_id,ecu,did,priority,last_payload,unchanged,contexts,updated_utc
+                        ) VALUES(?,?,?,?,?,?,?,?)
+                    """)
+                    defer { sqlite3_finalize(statement) }
+                    let ts = self.timestamp(date)
+                    for seed in seeds {
+                        sqlite3_reset(statement)
+                        sqlite3_clear_bindings(statement)
+                        sqlite3_bind_int64(statement, 1, sessionID)
+                        self.bindText(statement, 2, seed.ecu)
+                        sqlite3_bind_int64(statement, 3, Int64(seed.did))
+                        self.bindText(statement, 4, seed.priority.rawValue)
+                        if let bytes = seed.lastPayload {
+                            self.bindBlob(statement, 5, bytes)
+                        } else {
+                            sqlite3_bind_null(statement, 5)
+                        }
+                        sqlite3_bind_int64(statement, 6, Int64(seed.unchanged))
+                        self.bindText(statement, 7, seed.contexts.map(\.rawValue).joined(separator: ","))
+                        self.bindText(statement, 8, ts)
+                        try self.stepDone(statement)
                     }
                     try self.execute("COMMIT")
                 } catch {
