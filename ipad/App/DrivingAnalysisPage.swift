@@ -163,7 +163,7 @@ struct DrivingAnalysisPage: View {
                             model.analyzeDriveRecording()
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(model.isDriveCollecting || model.isDidScanning || model.isLivePolling || model.recordingURL == nil)
+                        .disabled(model.isDriveAnalyzing || model.isDriveCollecting || model.isDidScanning || model.isLivePolling || model.recordingURL == nil)
 
                         if !model.analyzedRecordingName.isEmpty {
                             Text("解析ファイル：\(model.analyzedRecordingName)")
@@ -171,7 +171,13 @@ struct DrivingAnalysisPage: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if model.driveFieldCandidates.isEmpty {
+                        if model.isDriveAnalyzing {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                Text("大量のDID時系列を解析中。画面操作は継続できます。")
+                                    .font(.caption)
+                            }
+                        } else if model.driveFieldCandidates.isEmpty {
                             Text("収集後に解析してください。同じDIDが8点以上、かつ車速/RPMが変化するデータが必要です。")
                                 .foregroundStyle(.secondary)
                         } else {
