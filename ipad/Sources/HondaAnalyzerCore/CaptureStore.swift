@@ -185,20 +185,29 @@ public final class CaptureStore: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             do {
-                let s = try self.prepare("""
-                    INSERT OR IGNORE INTO did_drive_plan(
-                        session_id,ecu,did,discovered_session_id,created_utc
-                    ) VALUES(?,?,?,NULL,?)
-                """)
-                defer { sqlite3_finalize(s) }
-                for candidate in candidates {
-                    sqlite3_reset(s)
-                    sqlite3_clear_bindings(s)
-                    sqlite3_bind_int64(s, 1, sessionID)
-                    self.bindText(s, 2, candidate.ecu)
-                    sqlite3_bind_int64(s, 3, Int64(candidate.did))
-                    self.bindText(s, 4, self.timestamp(date))
-                    try self.stepDone(s)
+                // Large historical Positive inventories must not generate
+                // thousands of individual synchronous SQLite commits.
+                try self.execute("BEGIN IMMEDIATE")
+                do {
+                    let s = try self.prepare("""
+                        INSERT OR IGNORE INTO did_drive_plan(
+                            session_id,ecu,did,discovered_session_id,created_utc
+                        ) VALUES(?,?,?,NULL,?)
+                    """)
+                    defer { sqlite3_finalize(s) }
+                    for candidate in candidates {
+                        sqlite3_reset(s)
+                        sqlite3_clear_bindings(s)
+                        sqlite3_bind_int64(s, 1, sessionID)
+                        self.bindText(s, 2, candidate.ecu)
+                        sqlite3_bind_int64(s, 3, Int64(candidate.did))
+                        self.bindText(s, 4, self.timestamp(date))
+                        try self.stepDone(s)
+                    }
+                    try self.execute("COMMIT")
+                } catch {
+                    try? self.execute("ROLLBACK")
+                    throw error
                 }
             } catch { self.report(error) }
         }
