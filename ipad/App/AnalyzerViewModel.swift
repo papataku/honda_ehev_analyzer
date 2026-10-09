@@ -713,6 +713,8 @@ final class AnalyzerViewModel: ObservableObject {
             return driveScheduler
         }
         let created = AdaptiveDriveDIDScheduler(candidates: candidates)
+        // Reuse historical priorities but ALWAYS recheck after reconnect.
+        created.restore(loadDriveSamplingSeeds(from: captureDatabaseURLs()))
         driveScheduler = created
         driveSamplingSummary = created.summary
         return created
@@ -748,6 +750,11 @@ final class AnalyzerViewModel: ObservableObject {
             store.addEvent(
                 sessionID: sessionID, at: now, kind: "DRIVE_DID_PRIORITY",
                 note: "\(candidate.label) \(transition.previous.rawValue) -> \(transition.current.rawValue) \(transition.reason)"
+            )
+        }
+        if isPositive && driveCollectedCount % 250 == 0 {
+            store.saveDriveSamplingState(
+                sessionID: sessionID, at: now, seeds: scheduler.snapshots()
             )
         }
         driveSamplingSummary = scheduler.summary
@@ -855,6 +862,9 @@ final class AnalyzerViewModel: ObservableObject {
                 transcript.append("DRIVE CAPTURE ERROR \(error.localizedDescription)")
                 statusMessage = "走行解析収集停止: \(error.localizedDescription)"
             }
+            store.saveDriveSamplingState(
+                sessionID: sid, at: Date(), seeds: scheduler.snapshots()
+            )
             store.addEvent(
                 sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_END",
                 note: "complete_samples=\(driveCollectedCount) active=\(driveSamplingSummary.active) watch=\(driveSamplingSummary.watch) dormant=\(driveSamplingSummary.dormant)"
@@ -953,6 +963,9 @@ final class AnalyzerViewModel: ObservableObject {
                     kind: "DID_SCAN_RESUME_STATIONARY",
                     note: "ECU \(ecu) DID \(String(format: "%04X", did)): 0 km/h x3 + renewed P confirmation"
                 )
+                store.saveDriveSamplingState(
+                    sessionID: sessionID, at: Date(), seeds: scheduler.snapshots()
+                )
                 isDidScanPausedForSpeed = false
                 didScanCurrent = "再開 DID \(String(format: "%04X", did))"
                 statusMessage = "車速0 km/h安定とP確認により未知DID探索を再開"
@@ -1004,6 +1017,9 @@ final class AnalyzerViewModel: ObservableObject {
             try await Task.sleep(nanoseconds: 500_000_000)
         }
 
+        store.saveDriveSamplingState(
+            sessionID: sessionID, at: Date(), seeds: scheduler.snapshots()
+        )
         isDidScanPausedForSpeed = false
         return false
     }
