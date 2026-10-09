@@ -693,7 +693,7 @@ final class AnalyzerViewModel: ObservableObject {
 
     func refreshDriveCandidates() {
         captureStore?.flush()
-        driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs(), limit: 16)
+        driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs(), limit: 24)
     }
 
     func analyzeDriveRecording(_ url: URL? = nil) {
@@ -725,6 +725,7 @@ final class AnalyzerViewModel: ObservableObject {
             return
         }
         let candidates = driveCandidates
+        store.saveDrivePlan(sessionID: sid, at: Date(), candidates: candidates)
         isDriveCollecting = true
         driveCollectedCount = 0
         driveFieldCandidates = []
@@ -847,10 +848,11 @@ final class AnalyzerViewModel: ObservableObject {
 
         var tracker = StationaryResumeTracker(requiredZeroSamples: 3)
         let knownCandidates = loadDriveDIDCandidates(
-            from: captureDatabaseURLs(), limit: 16
+            from: captureDatabaseURLs(), limit: 24
         )
         var candidateIndex = 0
         var monitoringIndex = 0
+        store.saveDrivePlan(sessionID: sessionID, at: Date(), candidates: knownCandidates)
         store.addEvent(
             sessionID: sessionID, at: Date(), kind: "DRIVE_COLLECT_WHILE_DID_PAUSED",
             note: "known_positive_count=\(knownCandidates.count)"
