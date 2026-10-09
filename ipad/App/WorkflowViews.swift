@@ -292,7 +292,9 @@ struct OperationModeCards: View {
                     .disabled(
                         model.ble.state != "ready" ||
                         !model.elmInitialized ||
+                        model.isDriveCollecting ||
                         model.isBusy ||
+                        model.isDriveCollecting ||
                         model.isDidScanning
                     )
                 }
@@ -358,7 +360,7 @@ struct SessionExportPanel: View {
                     .font(.headline)
 
                 if model.isRecording {
-                    if model.isLivePolling || model.isDidScanning || model.isBusy {
+                    if model.isLivePolling || model.isDidScanning || model.isDriveCollecting || model.isBusy {
                         Text("取得処理を停止してからSQLite記録を終了してください。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
