@@ -107,7 +107,7 @@ public final class AdaptiveDriveDIDScheduler {
             currentContext = context
             if context != .unknown {
                 // A new drive state can reveal a formerly constant field.
-                for key in entries.keys {
+                for key in Array(entries.keys) {
                     guard var entry = entries[key] else { continue }
                     if entry.priority == .dormant || entry.priority == .watch {
                         entry.nextDue = min(entry.nextDue, now)
@@ -143,6 +143,9 @@ public final class AdaptiveDriveDIDScheduler {
         context: DriveOperatingContext
     ) -> DriveSamplingChange? {
         guard var entry = entries[candidate.id] else { return nil }
+        // Keep context consistent even if a deterministic replay/test directly
+        // supplies observations without first requesting next().
+        currentContext = context
         let previous = entry.priority
 
         if let payload, !payload.isEmpty {
