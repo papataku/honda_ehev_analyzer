@@ -76,6 +76,8 @@ final class AnalyzerViewModel: ObservableObject {
                 state == "bluetooth-unavailable" {
                 self.elmInitialized = false
                 self.knownSignalsValidated = false
+                self.stationaryConfirmed = false
+                self.observedEcus = []
                 self.activeHeaderCommand = nil
                 self.priority18Configured = false
             }
@@ -109,6 +111,8 @@ final class AnalyzerViewModel: ObservableObject {
             // known-signal evidence are present in that SQLite file.
             elmInitialized = false
             knownSignalsValidated = false
+            stationaryConfirmed = false
+            observedEcus = []
             liveSamples.removeAll()
             statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
