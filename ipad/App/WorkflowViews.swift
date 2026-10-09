@@ -58,7 +58,7 @@ struct SessionWorkflowPanel: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .disabled(model.isBusy || model.isDidScanning)
+                        .disabled(model.isBusy || model.isDidScanning || model.isDriveCollecting || model.isLivePolling)
                     }
                 }
             }
@@ -130,7 +130,7 @@ struct SessionWorkflowPanel: View {
         if !model.knownSignalsValidated {
             return "RPM・車速・水温・SOC・HV電圧/電流が読めることを確認します。"
         }
-        return "走行中はライブ監視、停車時だけDID探索を使います。"
+        return "次は下の3つから目的を選んでください。モーター回転数を調べるなら「走行解析」です。"
     }
 
     private var nextActionSymbol: String {
@@ -244,82 +244,98 @@ private struct WorkflowConnector: View {
 
 struct OperationModeCards: View {
     @ObservedObject var model: AnalyzerViewModel
+    let onOpenDriving: () -> Void
+    let onOpenDiscovery: () -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 250), spacing: 12)]
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                liveCard
-                discoveryCard
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("何をしたいですか？")
+                .font(.title2.bold())
+            Text("目的を選ぶだけで進められます。信号の意味を調べたい場合は「走行解析」、新しい信号を探したい場合は「DID探索」です。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
-            VStack(spacing: 12) {
-                liveCard
-                discoveryCard
+            LazyVGrid(columns: columns, spacing: 12) {
+                AnalyzerCard("1. 車両データを見る", systemImage: "gauge.with.dots.needle.50percent") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("RPM・車速・水温・SOC・HV電力をリアルタイム表示。未知DIDにはアクセスしません。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        if model.isLivePolling {
+                            StatusPill(text: "表示中", systemImage: "waveform.path.ecg", style: .good)
+                            Text(String(format: "実効 %.1f req/s", model.liveEffectiveRequestRateHz))
+                                .font(.caption.monospacedDigit())
+                            Button("表示を停止", role: .destructive) {
+                                model.stopLivePolling()
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button {
+                                model.startLivePolling()
+                            } label: {
+                                Label("ライブ表示を開始", systemImage: "play.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!ready || model.isDriveCollecting || model.isDidScanning || model.isBusy)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                AnalyzerCard("2. モーター信号を調べる", systemImage: "chart.xyaxis.line") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("走行中に既知のDIDを何度も記録し、モーター回転・発電機・トルクの候補を分析します。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        if model.isDriveCollecting {
+                            StatusPill(text: "収集中", systemImage: "record.circle.fill", style: .active)
+                        }
+                        Button {
+                            onOpenDriving()
+                        } label: {
+                            Label("走行解析を開く", systemImage: "arrow.right.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                AnalyzerCard("3. 未知の信号を探す", systemImage: "magnifyingglass.circle") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("安全に停車しPレンジを確認してから、未調査のDIDを探します。信号待ちでは実施しません。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        if model.isDidScanning {
+                            StatusPill(
+                                text: model.isDidScanPausedForSpeed ? "走行監視中" : "探索中",
+                                systemImage: "magnifyingglass",
+                                style: model.isDidScanPausedForSpeed ? .warning : .active
+                            )
+                        }
+                        Button {
+                            onOpenDiscovery()
+                        } label: {
+                            Label("DID探索を開く", systemImage: "arrow.right.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
     }
 
-    private var liveCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("走行中：ライブ監視", systemImage: "gauge.with.dots.needle.50percent")
-                    .font(.headline)
-                Text("既知の標準信号だけを継続取得します。未知DID探索は行いません。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if model.isLivePolling {
-                    Text(
-                        String(
-                            format: "実効 %.1f req/s",
-                            model.liveEffectiveRequestRateHz
-                        )
-                    )
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                }
-
-                if model.isLivePolling {
-                    Button("ライブ取得停止", role: .destructive) {
-                        model.stopLivePolling()
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button("ライブ取得開始") {
-                        model.startLivePolling()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        model.ble.state != "ready" ||
-                        !model.elmInitialized ||
-                        model.isDriveCollecting ||
-                        model.isBusy ||
-                        model.isDriveCollecting ||
-                        model.isDidScanning
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var discoveryCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("停車中：DID探索", systemImage: "magnifyingglass.circle")
-                    .font(.headline)
-                Text("Pレンジ・0 km/h確認後だけ、read-only UDS 0x22探索を実行します。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack {
-                    Image(systemName: model.stationaryConfirmed ? "checkmark.shield.fill" : "shield")
-                    Text(model.stationaryConfirmed ? "停車確認済み" : "DID探索ページで停車確認が必要")
-                        .font(.caption)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    private var ready: Bool {
+        model.ble.state == "ready" && model.isRecording &&
+        model.elmInitialized && model.knownSignalsValidated
     }
 }
 
@@ -338,7 +354,7 @@ struct VehicleSafetyBanner: View {
             .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         } else if model.isDidScanning {
             Label(
-                "停車中のread-only DID探索中。車速を検出するとDID送信を即停止します。",
+                "停車・P確認で未知DIDを探索中。車速監視で動きを検出すると未知DID要求を中断します。",
                 systemImage: "shield.checkered"
             )
             .font(.callout)
@@ -374,7 +390,7 @@ struct SessionExportPanel: View {
                         model.stopRecording()
                     }
                     .buttonStyle(.bordered)
-                    .disabled(model.isLivePolling || model.isDidScanning || model.isBusy)
+                    .disabled(model.isLivePolling || model.isDidScanning || model.isDriveCollecting || model.isBusy)
                 } else if let url = model.recordingURL {
                     Text("記録は正常終了しています。Macでの詳細解析や共有用にSQLiteを渡せます。")
                         .font(.caption)
