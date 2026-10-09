@@ -551,6 +551,89 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         )
     }
 
+
+    func testDriveAllowlistRejectsPartialAndIdentityDIDs() {
+        XCTAssertTrue(isDrivingSampleCandidate(
+            did: 0x2012, payloadLength: 36, status: "positive"
+        ))
+        XCTAssertTrue(isDrivingSampleCandidate(
+            did: 0xE480, payloadLength: 26, status: "positive"
+        ))
+        XCTAssertFalse(isDrivingSampleCandidate(
+            did: 0xF110, payloadLength: 17, status: "positive"
+        ))
+        XCTAssertFalse(isDrivingSampleCandidate(
+            did: 0x2019, payloadLength: 64, status: "positive_partial"
+        ))
+        XCTAssertFalse(isDrivingSampleCandidate(
+            did: 0xE480, payloadLength: 0, status: "positive"
+        ))
+    }
+
+    func testMotorCandidateScoringUsesEVSpeedCorrelation() {
+        let start = 1_700_000_000.0
+        let refs: [DriveReference] = (0..<30).map { i in
+            DriveReference(
+                time: start + Double(i),
+                speed: Double(10 + i * 2),
+                engineRPM: 0.0,
+                hvPower: i % 2 == 0 ? 12.0 : -8.0
+            )
+        }
+        let rows: [DrivePayloadSample] = (0..<30).map { i in
+            let raw = UInt16((10 + i * 2) * 64)
+            return DrivePayloadSample(
+                time: start + Double(i), ecu: "01", did: 0x2012,
+                payload: Data([UInt8(raw >> 8), UInt8(raw & 0xFF)])
+            )
+        }
+        let ranked = rankDriveFields(samples: rows, references: refs)
+        XCTAssertFalse(ranked.isEmpty)
+        XCTAssertEqual(ranked.first?.did, 0x2012)
+        XCTAssertTrue(ranked.contains {
+            $0.classification == "駆動モーター回転系候補" &&
+                abs($0.evSpeedCorrelation ?? 0) > 0.95
+        })
+
+        let stable: [DrivePayloadSample] = (0..<30).map { i in
+            DrivePayloadSample(
+                time: start + Double(i), ecu: "01", did: 0xE480,
+                payload: Data([0x00, 0x00, 0x00])
+            )
+        }
+        XCTAssertTrue(rankDriveFields(samples: stable, references: refs).isEmpty)
+    }
+
+    func testDriveCandidateLoaderUsesCompletePositiveFromSQLite() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("drive-test-\(UUID().uuidString).sqlite3")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let store = try CaptureStore(url: path)
+        let session = try store.createSession()
+        for (did, status, payload) in [
+            (UInt16(0x2012), DidProbeStatus.positive, Data(repeating: 0x33, count: 36)),
+            (UInt16(0xE480), DidProbeStatus.positive, Data(repeating: 0x24, count: 26)),
+            (UInt16(0xF110), DidProbeStatus.positive, Data(repeating: 0x31, count: 17)),
+            (UInt16(0x2019), DidProbeStatus.positivePartial, Data(repeating: 0x11, count: 40))
+        ] {
+            let outcome = DidProbeOutcome(
+                ecu: "01", did: did, status: status,
+                payload: payload, responseCanID: "18DAF101"
+            )
+            store.saveDidScan(sessionID: session, at: Date(), outcome: outcome)
+        }
+        store.flush()
+        let candidates = loadDriveDIDCandidates(from: [path])
+        XCTAssertEqual(candidates.map(\.did), [0x2012, 0xE480])
+        let record = DidProbeOutcome(
+            ecu: "01", did: 0x2012, status: .positive,
+            latencyMs: 12.0, payload: Data([0x12, 0x34]),
+            responseCanID: "18DAF101"
+        )
+        store.saveDriveSample(sessionID: session, at: Date(), outcome: record)
+        store.flush()
+    }
+
 }
 
 private extension ISO8601DateFormatter {
