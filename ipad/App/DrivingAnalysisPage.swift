@@ -92,7 +92,11 @@ struct DrivingAnalysisPage: View {
                             }
                         }
                         LabeledContent("有効DIDサンプル", value: "\(model.driveCollectedCount)件")
-                        LabeledContent("収集対象DID", value: "\(model.driveCandidates.count)件")
+                        LabeledContent("管理しているDID", value: "\(model.driveCandidates.count)件")
+                        LabeledContent("優先して取得", value: "\(model.driveSamplingSummary.active)件")
+                        LabeledContent("初期評価中", value: "\(model.driveSamplingSummary.learning)件")
+                        LabeledContent("取得頻度を低減", value: "\(model.driveSamplingSummary.watch)件")
+                        LabeledContent("通常取得を休止・定期再確認", value: "\(model.driveSamplingSummary.dormant)件")
                         Text(model.driveCurrent)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
@@ -113,7 +117,7 @@ struct DrivingAnalysisPage: View {
                 AnalyzerCard("発見済みDID", systemImage: "cpu") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("ここは発見した信号の一覧です。「応答あり」は意味が判明したという意味ではありません。未知信号の網羅探索は走行中に行いません。")
+                            Text("過去に完全なPositive応答があったDIDを全件管理します。固定の24件上限はありません。値が変わらないDIDは低頻度にし、走行状態が変わったら再確認します。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -129,7 +133,7 @@ struct DrivingAnalysisPage: View {
                                 columns: [GridItem(.adaptive(minimum: 180), spacing: 8)],
                                 alignment: .leading
                             ) {
-                                ForEach(model.driveCandidates) { item in
+                                ForEach(Array(model.driveCandidates.prefix(48))) { item in
                                     Label(item.label, systemImage: "checkmark.circle")
                                         .font(.caption.monospaced())
                                         .padding(8)
@@ -137,7 +141,15 @@ struct DrivingAnalysisPage: View {
                                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                                 }
                             }
+                            if model.driveCandidates.count > 48 {
+                                Text("ほか \(model.driveCandidates.count - 48)件も管理・取得対象です。表示は48件に省略しています。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        Text("変化なし＝永久停止ではありません。7回連続で同じ値なら12秒、走行状態をまたいで12回連続なら90秒間隔へ移し、値が変わればすぐ優先取得へ戻します。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
