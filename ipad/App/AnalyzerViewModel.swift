@@ -83,7 +83,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startRecording() {
-        guard captureStore == nil, !isDidScanning, !isLivePolling, !isBusy else { return }
+        guard captureStore == nil, !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy else { return }
         do {
             let documents = try FileManager.default.url(
                 for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -145,7 +145,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func initializeELM() {
-        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else { return }
         isBusy = true
         statusMessage = "ELM初期化中"
         Task {
@@ -162,7 +162,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func readKnownSignals() {
-        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else { return }
         isBusy = true
         statusMessage = "既知信号を取得中"
         Task {
