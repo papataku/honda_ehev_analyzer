@@ -11,6 +11,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var liveTask: Task<Void, Never>?
     private var didScanTask: Task<Void, Never>?
     private var driveCaptureTask: Task<Void, Never>?
+    private var driveScheduler: AdaptiveDriveDIDScheduler?
     private var didScanStopRequested = false
     private var activeHeaderCommand: String?
     private var priority18Configured = false
@@ -26,6 +27,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var driveCollectedCount = 0
     @Published var driveCurrent = "未開始"
     @Published var driveCandidates: [DriveDID] = []
+    @Published var driveSamplingSummary = AdaptiveDriveDIDScheduler(candidates: []).summary
     @Published var driveFieldCandidates: [DriveFieldCandidate] = []
     @Published var analyzedRecordingName = ""
     @Published var isDidScanPausedForSpeed = false
@@ -118,6 +120,8 @@ final class AnalyzerViewModel: ObservableObject {
             refreshPositiveDids()
             refreshDriveCandidates()
             driveCollectedCount = 0
+            driveScheduler = nil
+            driveSamplingSummary = AdaptiveDriveDIDScheduler(candidates: []).summary
             driveFieldCandidates = []
         } catch {
             statusMessage = "記録開始失敗: \(error.localizedDescription)"
@@ -697,7 +701,56 @@ final class AnalyzerViewModel: ObservableObject {
 
     func refreshDriveCandidates() {
         captureStore?.flush()
-        driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs(), limit: 24)
+        driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs())
+        driveScheduler?.addCandidates(driveCandidates)
+        if let driveScheduler { driveSamplingSummary = driveScheduler.summary }
+    }
+
+    private func schedulerFor(_ candidates: [DriveDID]) -> AdaptiveDriveDIDScheduler {
+        if let driveScheduler {
+            driveScheduler.addCandidates(candidates)
+            return driveScheduler
+        }
+        let created = AdaptiveDriveDIDScheduler(candidates: candidates)
+        driveScheduler = created
+        driveSamplingSummary = created.summary
+        return created
+    }
+
+    private var drivingContext: DriveOperatingContext {
+        DriveOperatingContext.classify(
+            speedKmh: speedKmh.map(Double.init),
+            engineRPM: rpm,
+            powerKW: hvPowerKW
+        )
+    }
+
+    private func recordAdaptiveDriveSample(
+        _ candidate: DriveDID,
+        outcome: DidProbeOutcome,
+        scheduler: AdaptiveDriveDIDScheduler,
+        store: CaptureStore,
+        sessionID: Int64
+    ) -> Bool {
+        let now = Date()
+        let isPositive = outcome.status == .positive && !outcome.payload.isEmpty
+        if isPositive {
+            store.saveDriveSample(sessionID: sessionID, at: now, outcome: outcome)
+            driveCollectedCount += 1
+        }
+        if let transition = scheduler.observe(
+            candidate,
+            payload: isPositive ? outcome.payload : nil,
+            at: now,
+            context: drivingContext
+        ) {
+            store.addEvent(
+                sessionID: sessionID, at: now, kind: "DRIVE_DID_PRIORITY",
+                note: "\(candidate.label) \(transition.previous.rawValue) -> \(transition.current.rawValue) \(transition.reason)"
+            )
+        }
+        driveSamplingSummary = scheduler.summary
+        return isPositive
     }
 
     func analyzeDriveRecording(_ url: URL? = nil) {
@@ -714,8 +767,8 @@ final class AnalyzerViewModel: ObservableObject {
             : "走行時系列を解析しました（候補 \(driveFieldCandidates.count)件、意味は未確定）"
     }
 
-    /// Driving collection never scans unknown DIDs. It operates on a bounded
-    /// allowlist loaded from complete positive read-only UDS responses.
+    /// Driving collection enumerates ALL previously complete-positive read-only DIDs.
+    /// Adaptive scheduling moves stable payloads to sparse rechecks (never bans them).
     func startDriveCollection() {
         guard !isBusy, !isDidScanning, !isLivePolling, !isDriveCollecting,
               ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
@@ -729,6 +782,7 @@ final class AnalyzerViewModel: ObservableObject {
             return
         }
         let candidates = driveCandidates
+        let scheduler = schedulerFor(candidates)
         store.saveDrivePlan(sessionID: sid, at: Date(), candidates: candidates)
         isDriveCollecting = true
         driveCollectedCount = 0
@@ -736,44 +790,40 @@ final class AnalyzerViewModel: ObservableObject {
         driveCurrent = "車速・RPM・HV Power確認中"
         store.addEvent(
             sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_START",
-            note: "read_only_known_positive=\(candidates.count) duty=4-per-cycle"
+            note: "read_only_known_positive=\(candidates.count) adaptive=true budget=4-per-cycle"
         )
         driveCaptureTask = Task { [weak self] in
             guard let self else { return }
-            var index = 0
-            var consecutiveErrors = 0
+            var consecutiveTransportErrors = 0
             do {
                 while !Task.isCancelled {
                     try await prepareMode01()
                     try await pollKnownCycle()
                     if let speed = speedKmh, speed > 0 {
                         stationaryConfirmed = false
-                        for _ in 0..<min(4, candidates.count) {
+                        for _ in 0..<4 {
                             try Task.checkCancellation()
-                            let candidate = candidates[index % candidates.count]
-                            index += 1
+                            guard let candidate = scheduler.next(
+                                now: Date(), context: drivingContext
+                            ) else { break }
                             let outcome = await sampleKnownDrivingDID(candidate)
-                            if outcome.status == .positive {
-                                store.saveDriveSample(sessionID: sid, at: Date(), outcome: outcome)
-                                driveCollectedCount += 1
-                                consecutiveErrors = 0
-                            } else {
-                                consecutiveErrors += 1
-                            }
-                            driveCurrent = "\(candidate.label) / \(driveCollectedCount)件"
-                            if consecutiveErrors >= 5 {
+                            let success = recordAdaptiveDriveSample(
+                                candidate, outcome: outcome, scheduler: scheduler,
+                                store: store, sessionID: sid
+                            )
+                            consecutiveTransportErrors = success ? 0 : consecutiveTransportErrors + 1
+                            driveCurrent = "\(candidate.label) / \(driveCollectedCount)件保存 / " +
+                                "\(driveSamplingSummary.dormant)件は低頻度再確認"
+                            if consecutiveTransportErrors >= 12 {
                                 throw NSError(
-                                    domain: "HondaAnalyzer.DriveCapture",
-                                    code: 1,
+                                    domain: "HondaAnalyzer.DriveCapture", code: 1,
                                     userInfo: [NSLocalizedDescriptionKey:
-                                        "連続5回のDID取得失敗。アダプタと信号を確認してください"]
+                                        "連続12回の応答失敗。アダプタ/ECU状態の確認が必要です"]
                                 )
                             }
                         }
                     } else {
-                        driveCurrent = "停車／車速不明：既知DID収集を待機"
-                        // Unknown discovery is intentionally NOT auto-started
-                        // just because the vehicle reaches 0 km/h.
+                        driveCurrent = "停車／車速不明：未知DIDは送信せず待機"
                         try await Task.sleep(nanoseconds: 500_000_000)
                     }
                 }
@@ -784,7 +834,7 @@ final class AnalyzerViewModel: ObservableObject {
             }
             store.addEvent(
                 sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_END",
-                note: "complete_samples=\(driveCollectedCount)"
+                note: "complete_samples=\(driveCollectedCount) active=\(driveSamplingSummary.active) watch=\(driveSamplingSummary.watch) dormant=\(driveSamplingSummary.dormant)"
             )
             store.flush()
             isDriveCollecting = false
