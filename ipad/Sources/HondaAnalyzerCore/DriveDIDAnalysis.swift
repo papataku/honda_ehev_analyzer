@@ -20,7 +20,7 @@ public func isDrivingSampleCandidate(did: UInt16, payloadLength: Int, status: St
         !(0xF100...0xF1FF).contains(Int(did))
 }
 
-public func loadDriveDIDCandidates(from urls: [URL], limit: Int = 16) -> [DriveDID] {
+public func loadDriveDIDCandidates(from urls: [URL], limit: Int? = nil) -> [DriveDID] {
     var found: [String: DriveDID] = [:]
     for url in urls {
         var db: OpaquePointer?
@@ -72,6 +72,7 @@ public func loadDriveDIDCandidates(from urls: [URL], limit: Int = 16) -> [DriveD
         if $0.ecu != $1.ecu { return $0.ecu < $1.ecu }
         return $0.did < $1.did
     }
+    guard let limit else { return sorted }
     return Array(sorted.prefix(max(0, limit)))
 }
 
