@@ -10,6 +10,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var captureSessionID: Int64?
     private var liveTask: Task<Void, Never>?
     private var didScanTask: Task<Void, Never>?
+    private var driveCaptureTask: Task<Void, Never>?
     private var didScanStopRequested = false
     private var activeHeaderCommand: String?
     private var priority18Configured = false
@@ -21,6 +22,11 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var knownSignalsValidated = false
     @Published var isLivePolling = false
     @Published var isDidScanning = false
+    @Published var isDriveCollecting = false
+    @Published var driveCollectedCount = 0
+    @Published var driveCurrent = "未開始"
+    @Published var driveCandidates: [DriveDID] = []
+    @Published var driveFieldCandidates: [DriveFieldCandidate] = []
     @Published var isDidScanPausedForSpeed = false
     @Published var autoResumeDidScanAfterStop = true
     @Published var isRecording = false
@@ -105,13 +111,16 @@ final class AnalyzerViewModel: ObservableObject {
             liveSamples.removeAll()
             statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
+            refreshDriveCandidates()
+            driveCollectedCount = 0
+            driveFieldCandidates = []
         } catch {
             statusMessage = "記録開始失敗: \(error.localizedDescription)"
         }
     }
 
     func stopRecording() {
-        guard !isDidScanning, !isLivePolling, !isBusy,
+        guard !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy,
               let store = captureStore, let sid = captureSessionID else { return }
         do {
             try store.closeSession(sid)
@@ -170,7 +179,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startLivePolling() {
-        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else { return }
         isLivePolling = true
         liveEffectiveRequestRateHz = 0
 
@@ -238,7 +247,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func runSafeEcuCensus() {
-        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else { return }
         guard stationaryConfirmed else {
             statusMessage = "ECU確認前に完全停止・Pレンジ確認をチェックしてください"
             return
@@ -317,7 +326,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     private func startDidScan(start: UInt16, end: UInt16, adaptive: Bool) {
-        guard !isBusy, !isLivePolling, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDriveCollecting, !isDidScanning else { return }
         guard stationaryConfirmed else {
             statusMessage = "DID探索前に完全停止・Pレンジ確認をチェックしてください"
             return
@@ -459,7 +468,7 @@ final class AnalyzerViewModel: ObservableObject {
                                 return
                             }
                         }
-                        nextSpeedCheck = Date().addingTimeInterval(2.0)
+                        nextSpeedCheck = Date().addingTimeInterval(1.0)
                     }
 
                     let started = Date()
@@ -678,6 +687,133 @@ final class AnalyzerViewModel: ObservableObject {
         didScanTask?.cancel()
         didScanCurrent = "停止要求済み"
         statusMessage = "現在の要求が終わったところでDID探索を停止します"
+    }
+
+    func refreshDriveCandidates() {
+        captureStore?.flush()
+        driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs(), limit: 16)
+    }
+
+    func analyzeDriveRecording() {
+        guard !isDriveCollecting, !isDidScanning, !isLivePolling,
+              let url = recordingURL else {
+            statusMessage = "収集を停止してから解析してください"
+            return
+        }
+        captureStore?.flush()
+        driveFieldCandidates = analyzeDriveCapture(url)
+        statusMessage = driveFieldCandidates.isEmpty
+            ? "解析候補なし：同じDIDを走行中に8回以上取得し、速度やRPMが変化するログが必要です"
+            : "走行時系列を解析しました（候補 \(driveFieldCandidates.count)件、意味は未確定）"
+    }
+
+    /// Driving collection never scans unknown DIDs. It operates on a bounded
+    /// allowlist loaded from complete positive read-only UDS responses.
+    func startDriveCollection() {
+        guard !isBusy, !isDidScanning, !isLivePolling, !isDriveCollecting,
+              ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
+              let store = captureStore, let sid = captureSessionID else {
+            statusMessage = "BLE・記録・ELM・既知信号を準備してから走行解析を開始してください"
+            return
+        }
+        refreshDriveCandidates()
+        guard !driveCandidates.isEmpty else {
+            statusMessage = "収集対象DIDがありません。Pレンジ停車でPositive DID探索を先に行ってください"
+            return
+        }
+        let candidates = driveCandidates
+        isDriveCollecting = true
+        driveCollectedCount = 0
+        driveFieldCandidates = []
+        driveCurrent = "車速・RPM・HV Power確認中"
+        store.addEvent(
+            sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_START",
+            note: "read_only_known_positive=\(candidates.count) duty=4-per-cycle"
+        )
+        driveCaptureTask = Task { [weak self] in
+            guard let self else { return }
+            var index = 0
+            var consecutiveErrors = 0
+            do {
+                while !Task.isCancelled {
+                    try await prepareMode01()
+                    try await pollKnownCycle()
+                    if let speed = speedKmh, speed > 0 {
+                        stationaryConfirmed = false
+                        for _ in 0..<min(4, candidates.count) {
+                            try Task.checkCancellation()
+                            let candidate = candidates[index % candidates.count]
+                            index += 1
+                            let outcome = await sampleKnownDrivingDID(candidate)
+                            if outcome.status == .positive {
+                                store.saveDriveSample(sessionID: sid, at: Date(), outcome: outcome)
+                                driveCollectedCount += 1
+                                consecutiveErrors = 0
+                            } else {
+                                consecutiveErrors += 1
+                            }
+                            driveCurrent = "\(candidate.label) / \(driveCollectedCount)件"
+                            if consecutiveErrors >= 5 {
+                                throw NSError(
+                                    domain: "HondaAnalyzer.DriveCapture",
+                                    code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey:
+                                        "連続5回のDID取得失敗。アダプタと信号を確認してください"]
+                                )
+                            }
+                        }
+                    } else {
+                        driveCurrent = "停車／車速不明：既知DID収集を待機"
+                        // Unknown discovery is intentionally NOT auto-started
+                        // just because the vehicle reaches 0 km/h.
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                transcript.append("DRIVE CAPTURE ERROR \(error.localizedDescription)")
+                statusMessage = "走行解析収集停止: \(error.localizedDescription)"
+            }
+            store.addEvent(
+                sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_END",
+                note: "complete_samples=\(driveCollectedCount)"
+            )
+            store.flush()
+            isDriveCollecting = false
+            driveCaptureTask = nil
+            if !Task.isCancelled {
+                driveCurrent = "終了：\(driveCollectedCount)件"
+            }
+        }
+    }
+
+    func stopDriveCollection() {
+        driveCaptureTask?.cancel()
+        statusMessage = "走行解析収集を終了中。現在の要求完了を待っています"
+    }
+
+    private func sampleKnownDrivingDID(_ candidate: DriveDID) async -> DidProbeOutcome {
+        // No ATH0 retry, no unknown DID enumeration, no write/reset service.
+        guard let header = physicalRequestHeaderCommand(for: candidate.ecu) else {
+            return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error)
+        }
+        do {
+            try await selectHeader(header)
+            let command = String(format: "22%04X", candidate.did)
+            let result = try await session.command(command, timeout: 5.0)
+            append(result)
+            let outcome = classifyUDS22Text(
+                result.text, ecu: candidate.ecu, did: candidate.did,
+                latencyMs: result.latencyMs
+            )
+            promoteCommandIfPositive(command, outcome: outcome)
+            return outcome
+        } catch {
+            return DidProbeOutcome(
+                ecu: candidate.ecu, did: candidate.did,
+                status: .error, rawText: error.localizedDescription
+            )
+        }
     }
 
     private func waitForStationaryResume(
