@@ -76,6 +76,66 @@ public func loadDriveDIDCandidates(from urls: [URL], limit: Int? = nil) -> [Driv
     return Array(sorted.prefix(max(0, limit)))
 }
 
+/// Fetch last saved adaptive priorities across the local capture library.
+/// Old SQLite logs without the new table are skipped safely.
+public func loadDriveSamplingSeeds(from urls: [URL]) -> [DriveSamplingSeed] {
+    var found: [String: (String, DriveSamplingSeed)] = [:]
+    for url in urls {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(
+            url.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil
+        ) == SQLITE_OK, let db else {
+            if let db { sqlite3_close(db) }
+            continue
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+            SELECT UPPER(ecu),did,priority,last_payload,unchanged,contexts,updated_utc
+            FROM did_drive_adaptive_state ORDER BY updated_utc
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK,
+              let stmt else { continue }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let ecuText = sqlite3_column_text(stmt, 0),
+                  let priorityText = sqlite3_column_text(stmt, 2),
+                  let updatedText = sqlite3_column_text(stmt, 6) else { continue }
+            let ecu = String(cString: ecuText)
+            let number = Int(sqlite3_column_int(stmt, 1))
+            guard (0...65535).contains(number),
+                  normalizedEcuSource(ecu) != nil,
+                  let priority = DriveSamplingPriority(rawValue: String(cString: priorityText))
+            else { continue }
+            let did = UInt16(number)
+            let bytes: Data?
+            if sqlite3_column_type(stmt, 3) == SQLITE_NULL {
+                bytes = nil
+            } else if let blob = sqlite3_column_blob(stmt, 3) {
+                bytes = Data(bytes: blob, count: Int(sqlite3_column_bytes(stmt, 3)))
+            } else {
+                bytes = nil
+            }
+            let contextText = sqlite3_column_text(stmt, 5)
+                .map { String(cString: $0) } ?? ""
+            let contexts = contextText.split(separator: ",").compactMap {
+                DriveOperatingContext(rawValue: String($0))
+            }
+            let seed = DriveSamplingSeed(
+                ecu: ecu, did: did, priority: priority,
+                lastPayload: bytes,
+                unchanged: Int(sqlite3_column_int(stmt, 4)),
+                contexts: contexts
+            )
+            let when = String(cString: updatedText)
+            if let current = found[seed.id], current.0 > when { continue }
+            found[seed.id] = (when, seed)
+        }
+    }
+    return found.values.map { $0.1 }
+}
+
 public struct DriveFieldCandidate: Identifiable, Sendable {
     public let ecu: String
     public let did: UInt16
