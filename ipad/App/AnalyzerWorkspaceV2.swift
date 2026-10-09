@@ -106,6 +106,19 @@ struct FinalAnalyzerWorkspace: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                if model.isRecording {
+                    StatusPill(text: "SQLite記録中", systemImage: "record.circle.fill", style: .active)
+                }
+                if model.isDriveCollecting {
+                    StatusPill(text: "走行解析収集中", systemImage: "chart.xyaxis.line", style: .active)
+                } else if model.isDidScanPausedForSpeed {
+                    StatusPill(text: "未知探索停止・走行データ収集中", systemImage: "pause.circle.fill", style: .warning)
+                } else if model.isDidScanning {
+                    StatusPill(text: "未知DID探索中", systemImage: "magnifyingglass", style: .warning)
+                } else if model.isLivePolling {
+                    StatusPill(text: "ライブ表示中", systemImage: "waveform.path.ecg", style: .good)
+                }
+
                 Button {
                     onOpenConnection()
                 } label: {
