@@ -24,3 +24,12 @@ public struct StationaryResumeTracker: Equatable, Sendable {
         consecutiveZeroSamples = 0
     }
 }
+
+/**
+ Stable 0 km/h is necessary, but never sufficient, to restart unknown DID
+ enumeration after a moving interval. The human must reconfirm P/parking.
+ The adapter does not have a validated gear-position PID.
+ */
+public func mayResumeUnknownDID(stableZero: Bool, parkingConfirmed: Bool) -> Bool {
+    stableZero && parkingConfirmed
+}
