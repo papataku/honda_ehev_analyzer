@@ -247,6 +247,18 @@ private struct DiscoveryPage: View {
 
                 VehicleSafetyBanner(model: model)
 
+                AnalyzerCard("この画面で行うこと", systemImage: "list.number") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("車を安全に停めてPレンジを確認し、ECUを選んで未知の信号番号（DID）を探します。発見した値の意味を調べる作業は「走行解析」で行います。")
+                            .font(.callout)
+                        Label("① 記録と初期化 → ② P確認 → ③ 応答ECU確認 → ④ 探索", systemImage: "arrow.right")
+                            .font(.subheadline.weight(.semibold))
+                        Text("信号待ち中の0 km/hでは探索しません。走行検出後は安全に停車し、P確認をもう一度行う必要があります。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 AnalyzerCard("安全条件", systemImage: "shield.checkered") {
                     VStack(alignment: .leading, spacing: 12) {
                         SafetyRow(
@@ -266,16 +278,20 @@ private struct DiscoveryPage: View {
                         )
 
                         Toggle(
-                            "1. 完全停止・Pレンジを確認",
+                            "① 安全に駐車し、Pレンジに入れたことを確認",
                             isOn: $model.stationaryConfirmed
                         )
                         .font(.headline)
+                        .accessibilityHint("車速0だけではPレンジは判定できません。安全な場所に駐車し、実際にPへ入れた場合だけONにしてください。")
+                        Text("Pレンジの状態は現在の車両通信から取得できないため、このチェックは手動確認です。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 AnalyzerCard("ECU選択", systemImage: "cpu") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Button("2. 安全な既知要求でECU候補を確認") {
+                        Button("② 通信できるECUを確認") {
                             model.runSafeEcuCensus()
                         }
                         .buttonStyle(.borderedProminent)
@@ -292,10 +308,10 @@ private struct DiscoveryPage: View {
                         )
 
                         if model.observedEcus.isEmpty {
-                            Text("まだECU候補を確認していません。")
+                            Text("ECU未確認：P確認後に上のボタンを押してください。")
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("3. 実際に応答したECU sourceを選択")
+                            Text("③ 通信応答があったECUを選ぶ")
                                 .font(.subheadline.weight(.semibold))
 
                             FlowLayout(spacing: 8) {
@@ -317,7 +333,7 @@ private struct DiscoveryPage: View {
                                 }
                             }
 
-                            Text("ECU名や役割はCAN IDだけでは決めません。")
+                            Text("ECUは車両内の制御ユニットです。ここでは通信できる相手を選ぶだけで、役割はまだ確定しません。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -345,20 +361,27 @@ private struct DiscoveryPage: View {
                             ProgressView(value: model.didScanProgress)
                         } else {
                             HStack(spacing: 12) {
-                                Button("4A. 2000–20FF 短時間探索") {
+                                Button("④ 少範囲で試す（2000–20FF）") {
                                     model.startDidScan2000Range()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!canStartScan)
 
-                                Button("4B. 0000–FFFF 全範囲") {
+                                Button("④ 全範囲を探索（長時間）") {
                                     showFullScanConfirmation = true
                                 }
                                 .buttonStyle(.bordered)
                                 .disabled(!canStartScan)
                             }
 
-                            Text("全範囲は2000帯→sector→page代表→反応page→未探索全埋めの順で進み、過去SQLiteからresumeします。")
+                            Text("最初は左の少範囲探索をおすすめします。全範囲では見つかりやすい範囲を先に試し、未確認の番号へ進みます。過去の記録済み結果は再利用します。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if !canStartScan {
+                                Text("開始できない理由：\(scanUnavailableReason)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            }
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -422,6 +445,9 @@ private struct DiscoveryPage: View {
 
                 if model.isDidScanning || !model.positiveDids.isEmpty {
                     AnalyzerCard("Positive DID", systemImage: "checkmark.circle") {
+                        Text("Positive＝ECUがデータを返した項目。値の意味や単位が判明したわけではありません。partial＝受信途中なので走行解析の対象にしません。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if model.positiveDids.isEmpty {
                             HStack {
                                 ProgressView()
@@ -467,6 +493,19 @@ private struct DiscoveryPage: View {
         } message: {
             Text("0000–FFFFは数時間規模です。走行検出中は未知DID要求を停止し、既知Positiveのみ収集します。停車してPを再確認した場合だけ探索を再開します。結果はSQLiteへ保存されます。")
         }
+    }
+
+    private var scanUnavailableReason: String {
+        if model.ble.state != "ready" { return "Bluetooth未接続。ダッシュボードの開始準備へ戻ってください。" }
+        if !model.isRecording { return "SQLite記録を開始してください。" }
+        if !model.elmInitialized || !model.knownSignalsValidated { return "ELM初期化と既知信号確認が必要です。" }
+        if !model.stationaryConfirmed { return "安全に駐車してPレンジを確認し、①をONにしてください。" }
+        if model.observedEcus.isEmpty { return "② 通信できるECUを確認してください。" }
+        if !selectedObservedEcu { return "③ 応答があったECUを選んでください。" }
+        if model.isDriveCollecting { return "走行解析収集を停止してください。" }
+        if model.isLivePolling { return "ライブ表示を停止してください。" }
+        if model.isBusy { return "通信処理完了後に開始できます。" }
+        return "準備ができています"
     }
 
     private var canStartScan: Bool {
