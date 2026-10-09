@@ -559,6 +559,9 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertTrue(isDrivingSampleCandidate(
             did: 0xE480, payloadLength: 26, status: "positive"
         ))
+        XCTAssertTrue(isDrivingSampleCandidate(
+            did: 0xE600, payloadLength: 1, status: "positive"
+        ))
         XCTAssertFalse(isDrivingSampleCandidate(
             did: 0xF110, payloadLength: 17, status: "positive"
         ))
