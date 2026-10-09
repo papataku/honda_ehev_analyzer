@@ -650,6 +650,7 @@ final class AnalyzerViewModel: ObservableObject {
             )
             store.flush()
             refreshPositiveDids()
+            refreshDriveCandidates()
             isDidScanPausedForSpeed = false
             isDidScanning = false
             didScanTask = nil
@@ -843,6 +844,15 @@ final class AnalyzerViewModel: ObservableObject {
         }
 
         var tracker = StationaryResumeTracker(requiredZeroSamples: 3)
+        let knownCandidates = loadDriveDIDCandidates(
+            from: captureDatabaseURLs(), limit: 16
+        )
+        var candidateIndex = 0
+        var monitoringIndex = 0
+        store.addEvent(
+            sessionID: sessionID, at: Date(), kind: "DRIVE_COLLECT_WHILE_DID_PAUSED",
+            note: "known_positive_count=\(knownCandidates.count)"
+        )
 
         while !didScanStopRequested && !Task.isCancelled {
             let speed: Double?
@@ -856,29 +866,62 @@ final class AnalyzerViewModel: ObservableObject {
                 continue
             }
 
-            if tracker.observe(speedKmh: speed) {
+            let stoppedStable = tracker.observe(speedKmh: speed)
+            if stoppedStable && stationaryConfirmed {
                 store.addEvent(
                     sessionID: sessionID,
                     at: Date(),
                     kind: "DID_SCAN_RESUME_STATIONARY",
-                    note: "ECU \(ecu) DID \(String(format: "%04X", did)): 0 km/h confirmed 3 times"
+                    note: "ECU \(ecu) DID \(String(format: "%04X", did)): 0 km/h x3 + renewed P confirmation"
                 )
                 isDidScanPausedForSpeed = false
                 didScanCurrent = "再開 DID \(String(format: "%04X", did))"
-                statusMessage = "0 km/hを3回連続確認したためDID探索を自動再開しました"
+                statusMessage = "車速0 km/h安定とP確認により未知DID探索を再開"
                 activeHeaderCommand = nil
                 return true
             }
 
-            if let speed {
-                statusMessage = speed <= 0.1
-                    ? "DID探索一時停止中：0 km/h安定確認 \(tracker.consecutiveZeroSamples)/3"
-                    : String(format: "DID探索一時停止中：車速 %.0f km/h。0 km/h安定待ち", speed)
+            if let speed, speed > 0 {
+                stationaryConfirmed = false
+                if !knownCandidates.isEmpty {
+                    let candidate = knownCandidates[candidateIndex % knownCandidates.count]
+                    candidateIndex += 1
+                    let outcome = await sampleKnownDrivingDID(candidate)
+                    if outcome.status == .positive {
+                        store.saveDriveSample(sessionID: sessionID, at: Date(), outcome: outcome)
+                        driveCollectedCount += 1
+                    }
+                    didScanCurrent = "走行解析 \(candidate.label) / \(driveCollectedCount)件"
+                }
+
+                // Refresh correlated references while moving, not unknown DIDs.
+                monitoringIndex += 1
+                if monitoringIndex % 2 == 0 {
+                    try await prepareMode01()
+                    let rpmResult = try await session.command("010C")
+                    append(rpmResult)
+                    rpm = decodeEngineRPM(rpmResult.text)
+                    let powerResult = try await session.command("019A")
+                    append(powerResult)
+                    if let hv = decodeHybridEv9A(powerResult.text) {
+                        hvVoltage = hv.voltageV
+                        hvCurrent = hv.currentA
+                        hvPowerKW = hv.powerKW
+                    }
+                }
+                statusMessage = "走行中：未知DID探索を停止し、発見済みDIDのみ収集中"
+            } else if stoppedStable {
+                statusMessage = "車速0 km/h安定。安全な場所でPに入れ、停車確認を再度ONにしてください"
+            } else if let speed {
+                statusMessage = String(
+                    format: "未知DID探索待機：車速 %.0f km/h / 0確認 %d/3",
+                    speed, tracker.consecutiveZeroSamples
+                )
             } else {
-                statusMessage = "DID探索一時停止中：車速不明。0 km/h安定待ち"
+                statusMessage = "車速不明：未知DID探索を停止中"
             }
 
-            try await Task.sleep(nanoseconds: 1_000_000_000)
+            try await Task.sleep(nanoseconds: 500_000_000)
         }
 
         isDidScanPausedForSpeed = false
