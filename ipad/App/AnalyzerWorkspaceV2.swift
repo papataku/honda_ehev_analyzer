@@ -452,7 +452,7 @@ private struct DiscoveryPage: View {
             }
             Button("キャンセル", role: .cancel) {}
         } message: {
-            Text("0000–FFFFは数時間規模です。走行検出中はDID送信を止め、0 km/h安定後に再開します。結果はSQLiteへ逐次保存されます。")
+            Text("0000–FFFFは数時間規模です。走行検出中は未知DID要求を停止し、既知Positiveのみ収集します。停車してPを再確認した場合だけ探索を再開します。結果はSQLiteへ保存されます。")
         }
     }
 
@@ -743,11 +743,11 @@ private struct SettingsPage: View {
                 AnalyzerCard("DID探索の安全動作", systemImage: "magnifyingglass.circle") {
                     VStack(alignment: .leading, spacing: 14) {
                         Toggle(
-                            "走行検出時は一時停止し、0 km/h安定後に自動再開",
+                            "走行検出時は既知DID収集へ切替、0 km/h安定とP再確認後に探索再開",
                             isOn: $model.autoResumeDidScanAfterStop
                         )
 
-                        Text("一時停止中は010Dだけを確認し、未知DID要求は送りません。0 km/hを3回連続確認して再開します。")
+                        Text("一時停止中は速度監視と発見済みPositive DIDのみ収集します。0 km/hを3回連続確認し、Pを再確認した場合だけ未知DID探索を再開します。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -756,7 +756,7 @@ private struct SettingsPage: View {
                 AnalyzerCard("安全方針", systemImage: "shield.checkered") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("未知自動探索はUDS 0x22のみ", systemImage: "checkmark.circle.fill")
-                        Label("走行中はDID探索を送信しない", systemImage: "checkmark.circle.fill")
+                        Label("走行中は未知DID探索を送信しない", systemImage: "checkmark.circle.fill")
                         Label("RAW証拠をSQLiteへ保存", systemImage: "checkmark.circle.fill")
                         Label("ECU役割はCAN IDだけで決めない", systemImage: "checkmark.circle.fill")
                     }
