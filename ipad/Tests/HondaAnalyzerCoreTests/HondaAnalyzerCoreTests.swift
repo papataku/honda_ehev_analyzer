@@ -475,6 +475,43 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(maxRate.restore, ["ATAT1", "ATST32"])
     }
 
+
+    func testElmCanHeaderPriorityIsConfiguredOnlyOnce() {
+        XCTAssertEqual(
+            elmCanHeaderSetupCommands(
+                header: "ATSHDB33F1",
+                activeHeader: nil,
+                priority18Configured: false
+            ),
+            ["ATCP18", "ATSHDB33F1"]
+        )
+        XCTAssertEqual(
+            elmCanHeaderSetupCommands(
+                header: "ATSHDA01F1",
+                activeHeader: "ATSHDB33F1",
+                priority18Configured: true
+            ),
+            ["ATSHDA01F1"]
+        )
+        XCTAssertEqual(
+            elmCanHeaderSetupCommands(
+                header: "ATSHDA01F1",
+                activeHeader: "ATSHDA01F1",
+                priority18Configured: true
+            ),
+            []
+        )
+        // After ATZ or reconnect, the priority must be sent again.
+        XCTAssertEqual(
+            elmCanHeaderSetupCommands(
+                header: "ATSHDB33F1",
+                activeHeader: nil,
+                priority18Configured: false
+            ),
+            ["ATCP18", "ATSHDB33F1"]
+        )
+    }
+
 }
 
 private extension ISO8601DateFormatter {
