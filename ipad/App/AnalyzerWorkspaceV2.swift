@@ -62,7 +62,12 @@ struct FinalAnalyzerWorkspace: View {
             Group {
                 switch selection ?? .dashboard {
                 case .dashboard:
-                    DashboardPage(model: model, onOpenConnection: onOpenConnection)
+                    DashboardPage(
+                        model: model,
+                        onOpenConnection: onOpenConnection,
+                        onOpenDriving: { selection = .driving },
+                        onOpenDiscovery: { selection = .discovery }
+                    )
                 case .driving:
                     DrivingAnalysisPage(model: model)
                 case .discovery:
@@ -115,6 +120,8 @@ struct FinalAnalyzerWorkspace: View {
 private struct DashboardPage: View {
     @ObservedObject var model: AnalyzerViewModel
     let onOpenConnection: () -> Void
+    let onOpenDriving: () -> Void
+    let onOpenDiscovery: () -> Void
 
     private let metricColumns = [
         GridItem(.adaptive(minimum: 180, maximum: 300), spacing: 12)
@@ -158,7 +165,11 @@ private struct DashboardPage: View {
                 VehicleSafetyBanner(model: model)
 
                 if model.knownSignalsValidated {
-                    OperationModeCards(model: model)
+                    OperationModeCards(
+                        model: model,
+                        onOpenDriving: onOpenDriving,
+                        onOpenDiscovery: onOpenDiscovery
+                    )
                 }
 
                 LazyVGrid(columns: metricColumns, spacing: 12) {
