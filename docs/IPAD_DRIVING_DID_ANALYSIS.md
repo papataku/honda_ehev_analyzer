@@ -41,7 +41,7 @@ Do **not** equate traffic-light stops to safe discovery conditions.
 
 Read-only SQLite `did_scan` history across local iPad captures. Inclusion:
 - successful fully reassembled `positive` status;
-- payload length 2..64 bytes;
+- payload length 1..64 bytes;
 - valid ECU source, expected responder `18DAF1xx`;
 - exclude `F100..F1FF` ECU identity/coding-style data;
 - exclude `positive_partial` and negative/no-data outcomes;
@@ -108,3 +108,5 @@ The Driving Analysis page shows total, learning, active, watch and dormant count
 For large captures, offline candidate analysis reads time-spanning sampled rows per DID (typically a few hundred) while leaving the SQLite source untouched; the computation is off the main SwiftUI actor so the interface can still respond.
 
 Priority snapshots are now persisted in the SQLite did_drive_adaptive_state table and restored from the latest recorded state for each ECU/DID. Every new session still forces an initial recheck; no historical decision permanently blocks data collection. Suppression tests compare complete payload bytes; counters or checksums that change even when physical fields do not may keep a DID in Active. Field-level noise detection and cross-session priority caching are future improvements. Being 'Active' does not prove a motor or generator signal.
+
+Single-byte complete-positive responses are included as valid state/flag candidates. Zero-length and incomplete responses remain excluded.
