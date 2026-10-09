@@ -572,13 +572,16 @@ final class HondaAnalyzerCoreTests: XCTestCase {
 
     func testMotorCandidateScoringUsesEVSpeedCorrelation() {
         let start = 1_700_000_000.0
-        let refs: [DriveReference] = (0..<30).map { i in
-            DriveReference(
+        var refs: [DriveReference] = []
+        for i in 0..<30 {
+            let speed = Double(10 + i * 2)
+            let power: Double = (i % 2 == 0) ? 12.0 : -8.0
+            refs.append(DriveReference(
                 time: start + Double(i),
-                speed: Double(10 + i * 2),
+                speed: speed,
                 engineRPM: 0.0,
-                hvPower: i % 2 == 0 ? 12.0 : -8.0
-            )
+                hvPower: power
+            ))
         }
         let rows: [DrivePayloadSample] = (0..<30).map { i in
             let raw = UInt16((10 + i * 2) * 64)
