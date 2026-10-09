@@ -181,6 +181,32 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
+    public func saveDriveSample(sessionID: Int64, at date: Date, outcome: DidProbeOutcome) {
+        guard outcome.status == .positive, outcome.payload.count >= 2 else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let s = try self.prepare("""
+                    INSERT INTO did_drive_samples(
+                        session_id,ts_utc,ecu,did,response_can_id,payload,latency_ms,success,partial
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
+                """)
+                defer { sqlite3_finalize(s) }
+                sqlite3_bind_int64(s, 1, sessionID)
+                self.bindText(s, 2, self.timestamp(date))
+                self.bindText(s, 3, outcome.ecu)
+                sqlite3_bind_int64(s, 4, Int64(outcome.did))
+                self.bindText(s, 5, outcome.responseCanID)
+                self.bindBlob(s, 6, outcome.payload)
+                if let ms = outcome.latencyMs { sqlite3_bind_double(s, 7, ms) }
+                else { sqlite3_bind_null(s, 7) }
+                sqlite3_bind_int(s, 8, 1)
+                sqlite3_bind_int(s, 9, 0)
+                try self.stepDone(s)
+            } catch { self.report(error) }
+        }
+    }
+
     public func promoteLatestCommandSuccess(sessionID: Int64, command: String) {
         queue.async { [weak self] in
             guard let self else { return }
