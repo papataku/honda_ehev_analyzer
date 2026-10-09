@@ -4,6 +4,7 @@ import HondaAnalyzerCore
 
 enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
+    case driving
     case discovery
     case sessions
     case technical
@@ -14,6 +15,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .dashboard: return "ダッシュボード"
+        case .driving: return "走行解析"
         case .discovery: return "DID探索"
         case .sessions: return "セッション"
         case .technical: return "技術情報"
@@ -24,6 +26,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.50percent"
+        case .driving: return "chart.xyaxis.line"
         case .discovery: return "magnifyingglass.circle"
         case .sessions: return "externaldrive.fill"
         case .technical: return "terminal"
@@ -60,6 +63,8 @@ struct FinalAnalyzerWorkspace: View {
                 switch selection ?? .dashboard {
                 case .dashboard:
                     DashboardPage(model: model, onOpenConnection: onOpenConnection)
+                case .driving:
+                    DrivingAnalysisPage(model: model)
                 case .discovery:
                     DiscoveryPage(model: model)
                 case .sessions:
@@ -130,6 +135,9 @@ private struct DashboardPage: View {
                         }
                         if model.isLivePolling {
                             StatusPill(text: "LIVE", systemImage: "waveform.path.ecg", style: .good)
+                        }
+                        if model.isDriveCollecting {
+                            StatusPill(text: "DRIVE", systemImage: "chart.xyaxis.line", style: .active)
                         }
                         if model.isDidScanPausedForSpeed {
                             StatusPill(text: "DID PAUSE", systemImage: "pause.circle.fill", style: .warning)
@@ -263,6 +271,7 @@ private struct DiscoveryPage: View {
                             !model.knownSignalsValidated ||
                             model.isBusy ||
                             model.isLivePolling ||
+                            model.isDriveCollecting ||
                             model.isDidScanning
                         )
 
@@ -375,7 +384,7 @@ private struct DiscoveryPage: View {
                                     .foregroundStyle(.orange)
 
                                 Toggle(
-                                    "走行検出時は一時停止し、0 km/h安定後に自動再開",
+                                    "走行中は既知DID収集、0 km/h安定かつP再確認後に探索再開",
                                     isOn: $model.autoResumeDidScanAfterStop
                                 )
 
@@ -453,7 +462,8 @@ private struct DiscoveryPage: View {
         !model.observedEcus.isEmpty &&
         selectedObservedEcu &&
         !model.isBusy &&
-        !model.isLivePolling
+        !model.isLivePolling &&
+        !model.isDriveCollecting
     }
 
     private func normalizedSource(_ source: String) -> String? {
