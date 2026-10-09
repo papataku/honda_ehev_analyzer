@@ -871,7 +871,7 @@ final class AnalyzerViewModel: ObservableObject {
             }
 
             let stoppedStable = tracker.observe(speedKmh: speed)
-            if stoppedStable && stationaryConfirmed {
+            if mayResumeUnknownDID(stableZero: stoppedStable, parkingConfirmed: stationaryConfirmed) {
                 store.addEvent(
                     sessionID: sessionID,
                     at: Date(),
