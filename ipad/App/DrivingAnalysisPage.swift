@@ -3,6 +3,7 @@ import HondaAnalyzerCore
 
 struct DrivingAnalysisPage: View {
     @ObservedObject var model: AnalyzerViewModel
+    let onOpenDiscovery: () -> Void
 
     var body: some View {
         ScrollView {
@@ -13,9 +14,52 @@ struct DrivingAnalysisPage: View {
                     systemImage: "chart.xyaxis.line"
                 )
 
+                AnalyzerCard("開始前のチェック", systemImage: "checkmark.shield") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        requirementRow(
+                            "BLEデバイスへ接続",
+                            satisfied: model.ble.state == "ready",
+                            note: "KW905または自作ELM互換機"
+                        )
+                        requirementRow(
+                            "SQLite記録を開始",
+                            satisfied: model.isRecording,
+                            note: "RAWと既知信号の記録を残します"
+                        )
+                        requirementRow(
+                            "ELM初期化・既知信号確認",
+                            satisfied: model.elmInitialized && model.knownSignalsValidated,
+                            note: "RPM・車速・HV電力を読み取れる状態"
+                        )
+                        requirementRow(
+                            "発見済みDIDがある",
+                            satisfied: !model.driveCandidates.isEmpty,
+                            note: "未発見なら、停車・P確認後に探索してください"
+                        )
+                        if !model.driveCandidates.isEmpty {
+                            StatusPill(
+                                text: "走行解析の準備状況を確認してください",
+                                systemImage: "info.circle",
+                                style: .neutral
+                            )
+                        }
+                        Text("操作できないボタンには準備不足などの理由があります。必要な項目を上から確認してください。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if model.driveCandidates.isEmpty {
+                            Button {
+                                onOpenDiscovery()
+                            } label: {
+                                Label("停車中のDID探索へ", systemImage: "arrow.right")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+
                 AnalyzerCard("走行データ収集", systemImage: "car.side") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("走行中は発見済みのPositive DIDとRPM・車速・HV電力だけを繰り返し収集。未知DID探索はしません。停車中の探索は別ページで、安全な場所でP確認後に実施してください。")
+                        Text("出発前に「走行解析を開始」を押し、iPadを固定してください。動いている間は発見済みの信号だけを繰り返し保存します。停車中は自動的に待機します。")
                             .font(.callout)
                         HStack {
                             StatusPill(
@@ -42,13 +86,24 @@ struct DrivingAnalysisPage: View {
                         Text(model.driveCurrent)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                        if !canStart && !model.isDriveCollecting {
+                            Text(startUnavailableReason)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .accessibilityLabel("開始できない理由：\(startUnavailableReason)")
+                        }
+                        if model.isDriveCollecting {
+                            Text("運転中は画面を操作しないでください。停止操作は安全に停車してから行ってください。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
                 AnalyzerCard("発見済みDID", systemImage: "cpu") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("完全なPositive応答のみ。未確定DIDの網羅探索は走行中に行いません。")
+                            Text("ここは発見した信号の一覧です。「応答あり」は意味が判明したという意味ではありません。未知信号の網羅探索は走行中に行いません。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -57,7 +112,7 @@ struct DrivingAnalysisPage: View {
                                 .disabled(model.isDriveCollecting || model.isDidScanning)
                         }
                         if model.driveCandidates.isEmpty {
-                            Text("候補なし。停車中にDID探索を行いPositiveを記録してください。")
+                            Text("まだ収集できる信号がありません。停車中にDID探索で応答のある項目を見つけてください。")
                                 .foregroundStyle(.secondary)
                         } else {
                             LazyVGrid(
@@ -78,7 +133,7 @@ struct DrivingAnalysisPage: View {
 
                 AnalyzerCard("モーター/発電機候補解析", systemImage: "chart.xyaxis.line") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("DIDペイロードを複数の整数型・バイト順として検証し、EV区間の車速、エンジンRPM、HV電力との相関を調べます。順位は候補であり、単位や信号の意味を確定するものではありません。")
+                        Text("保存したデータから、車速やエンジン回転数と一緒に変化する値を探します。「候補スコア」は発見の優先度で、信号の正しさの確率ではありません。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -106,12 +161,17 @@ struct DrivingAnalysisPage: View {
                                         Text(item.field)
                                             .font(.caption.monospaced())
                                         Spacer()
-                                        Text(String(format: "%.2f", item.score))
-                                            .font(.subheadline.monospacedDigit())
+                                        Text(String(format: "候補スコア %.2f", item.score))
+                                            .font(.caption.monospacedDigit())
                                     }
-                                    Text(item.classification)
-                                        .font(.caption.weight(.semibold))
-                                    Text("車速 \(correlation(item.speedCorrelation)) / EV \(correlation(item.evSpeedCorrelation)) / RPM \(correlation(item.engineCorrelation)) / HV \(correlation(item.hvPowerCorrelation))")
+                                    HStack(spacing: 8) {
+                                        Text(item.classification)
+                                            .font(.caption.weight(.semibold))
+                                        Text("仮説・未検証")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                    }
+                                    Text("相関係数 r：車速 \(correlation(item.speedCorrelation)) / EV時車速 \(correlation(item.evSpeedCorrelation)) / エンジン回転 \(correlation(item.engineCorrelation)) / HV電力 \(correlation(item.hvPowerCorrelation))")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                     Text("\(item.samples)点 / raw \(item.minValue.formatted())〜\(item.maxValue.formatted()) / スケール未確定")
@@ -121,6 +181,20 @@ struct DrivingAnalysisPage: View {
                                 .padding(.vertical, 6)
                                 Divider()
                             }
+                        }
+
+                        DisclosureGroup("解析結果の見方・専門用語") {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text("DID：ECU内部のデータを読み出すための識別番号です。")
+                                Text("Positive：ECUが値を返したこと。意味が特定できたわけではありません。")
+                                Text("EV区間：車速があり、エンジンRPMが低い時の参考区間です。")
+                                Text("相関係数r：-1〜+1の変動の似かたです。±1に近くても因果関係や単位の証明にはなりません。")
+                                Text("発電機候補：エンジンと連動するだけの別信号も含みます。複数ログで照合が必要です。")
+                                Text("確定の目安：EV/発電/回生を含む複数走行で同じオフセット・倍率が再現すること。")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 8)
                         }
                     }
                 }
@@ -134,6 +208,41 @@ struct DrivingAnalysisPage: View {
                 model.refreshDriveCandidates()
             }
         }
+    }
+
+    private func requirementRow(_ title: String, satisfied: Bool, note: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: satisfied ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(satisfied ? .green : .secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(satisfied ? "完了" : "未完了")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(satisfied ? .green : .orange)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var startUnavailableReason: String {
+        if model.ble.state != "ready" { return "Bluetooth接続が必要です。ダッシュボードの開始準備へ戻ってください。" }
+        if !model.isRecording { return "最初にSQLite記録を開始してください。" }
+        if !model.elmInitialized || !model.knownSignalsValidated {
+            return "ELM初期化と既知信号の確認を完了してください。"
+        }
+        if model.driveCandidates.isEmpty {
+            return "収集対象のDIDがありません。安全な停車/P確認後にDID探索を行ってください。"
+        }
+        if model.isLivePolling { return "ライブ表示を停止してから走行解析を開始してください。" }
+        if model.isDidScanning { return "DID探索を停止してから走行解析を開始してください。" }
+        if model.isBusy { return "通信処理が終わってから開始できます。" }
+        return "準備完了"
     }
 
     private var canStart: Bool {
