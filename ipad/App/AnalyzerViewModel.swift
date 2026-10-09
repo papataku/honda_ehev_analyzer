@@ -12,6 +12,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var didScanTask: Task<Void, Never>?
     private var didScanStopRequested = false
     private var activeHeaderCommand: String?
+    private var priority18Configured = false
     private var bleObservation: AnyCancellable?
     private var bleStateObservation: AnyCancellable?
 
@@ -68,6 +69,8 @@ final class AnalyzerViewModel: ObservableObject {
                 state == "bluetooth-unavailable" {
                 self.elmInitialized = false
                 self.knownSignalsValidated = false
+                self.activeHeaderCommand = nil
+                self.priority18Configured = false
             }
         }
     }
@@ -138,6 +141,7 @@ final class AnalyzerViewModel: ObservableObject {
         Task {
             let results = await session.initialize()
             activeHeaderCommand = nil
+            priority18Configured = false
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             elmInitialized = failed.isEmpty
@@ -845,10 +849,20 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     private func selectHeader(_ headerCommand: String) async throws {
-        if activeHeaderCommand == headerCommand { return }
-        try await sendAT("ATCP18")
-        try await sendAT(headerCommand)
-        activeHeaderCommand = headerCommand
+        let commands = elmCanHeaderSetupCommands(
+            header: headerCommand,
+            activeHeader: activeHeaderCommand,
+            priority18Configured: priority18Configured
+        )
+        for command in commands {
+            try await sendAT(command)
+            if command == "ATCP18" {
+                priority18Configured = true
+            }
+        }
+        if !commands.isEmpty {
+            activeHeaderCommand = headerCommand
+        }
     }
 
     private func pollKnownCycle(requireComplete: Bool = false) async throws {
