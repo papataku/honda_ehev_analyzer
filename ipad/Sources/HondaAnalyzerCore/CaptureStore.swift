@@ -262,7 +262,7 @@ public final class CaptureStore: @unchecked Sendable {
     }
 
     public func saveDriveSample(sessionID: Int64, at date: Date, outcome: DidProbeOutcome) {
-        guard outcome.status == .positive, outcome.payload.count >= 2 else { return }
+        guard outcome.status == .positive, outcome.payload.count >= 1 else { return }
         queue.async { [weak self] in
             guard let self else { return }
             do {
