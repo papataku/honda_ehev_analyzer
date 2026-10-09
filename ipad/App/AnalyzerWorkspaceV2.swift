@@ -68,7 +68,10 @@ struct FinalAnalyzerWorkspace: View {
                 case .discovery:
                     DiscoveryPage(model: model)
                 case .sessions:
-                    SessionsPage(model: model)
+                    SessionsPage(model: model) { url in
+                        model.analyzeDriveRecording(url)
+                        selection = .driving
+                    }
                 case .technical:
                     TechnicalPage(model: model)
                 case .settings:
@@ -475,6 +478,7 @@ private struct DiscoveryPage: View {
 
 private struct SessionsPage: View {
     @ObservedObject var model: AnalyzerViewModel
+    let onAnalyze: (URL) -> Void
     @State private var files: [SessionFileInfo] = []
 
     var body: some View {
@@ -542,6 +546,13 @@ private struct SessionsPage: View {
                                         .font(.subheadline.monospacedDigit())
                                         .foregroundStyle(.secondary)
 
+                                    Button {
+                                        onAnalyze(file.url)
+                                    } label: {
+                                        Label("信号解析", systemImage: "chart.xyaxis.line")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(model.isDriveCollecting || model.isDidScanning || model.isLivePolling)
                                     ShareLink(item: file.url) {
                                         Label("共有", systemImage: "square.and.arrow.up")
                                     }
