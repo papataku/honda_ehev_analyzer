@@ -30,6 +30,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var driveSamplingSummary = AdaptiveDriveDIDScheduler(candidates: []).summary
     @Published var driveFieldCandidates: [DriveFieldCandidate] = []
     @Published var analyzedRecordingName = ""
+    @Published var isDriveAnalyzing = false
     @Published var isDidScanPausedForSpeed = false
     @Published var autoResumeDidScanAfterStop = true
     @Published var isRecording = false
@@ -754,17 +755,28 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func analyzeDriveRecording(_ url: URL? = nil) {
-        guard !isDriveCollecting, !isDidScanning, !isLivePolling,
+        guard !isDriveAnalyzing, !isDriveCollecting, !isDidScanning, !isLivePolling,
               let captureURL = url ?? recordingURL else {
-            statusMessage = "収集を停止してから解析してください"
+            statusMessage = "収集停止後、保存済みSQLiteから解析を開始してください"
             return
         }
         captureStore?.flush()
-        driveFieldCandidates = analyzeDriveCapture(captureURL)
+        isDriveAnalyzing = true
         analyzedRecordingName = captureURL.lastPathComponent
-        statusMessage = driveFieldCandidates.isEmpty
-            ? "候補なし：同じDIDを走行中に8回以上取得し、車速/RPMの変化があるログが必要"
-            : "走行時系列を解析しました（候補 \(driveFieldCandidates.count)件、意味は未確定）"
+        driveFieldCandidates = []
+        statusMessage = "過去のDID時系列を解析しています"
+        Task { [weak self] in
+            // Large capture analysis must never monopolize SwiftUI's main actor.
+            let ranked = await Task.detached(priority: .userInitiated) {
+                analyzeDriveCapture(captureURL)
+            }.value
+            guard let self else { return }
+            driveFieldCandidates = ranked
+            isDriveAnalyzing = false
+            statusMessage = ranked.isEmpty
+                ? "候補なし：同一DIDを走行中に8回以上取得し、車速/RPMの変化があるログが必要"
+                : "走行時系列を解析しました（候補 \(ranked.count)件。意味は未確定）"
+        }
     }
 
     /// Driving collection enumerates ALL previously complete-positive read-only DIDs.
