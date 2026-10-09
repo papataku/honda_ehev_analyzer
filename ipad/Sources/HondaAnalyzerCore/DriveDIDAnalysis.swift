@@ -289,7 +289,23 @@ public func analyzeDriveCapture(_ url: URL) -> [DriveFieldCandidate] {
 
     var samples: [DrivePayloadSample] = []
     var statement: OpaquePointer?
-    let sql = "SELECT ts_utc,ecu,did,payload FROM did_drive_samples WHERE success=1 AND partial=0 ORDER BY ts_utc"
+    // Analyze a bounded, time-spanning subset per DID. The SQLite capture is
+    // never altered: only the in-memory correlation working set is reduced.
+    // Modern iOS SQLite supports window functions (ROW_NUMBER / COUNT).
+    let sql = """
+        WITH ranked AS (
+            SELECT ts_utc,ecu,did,payload,
+                   ROW_NUMBER() OVER (PARTITION BY UPPER(ecu), did ORDER BY ts_utc) AS seq,
+                   COUNT(*) OVER (PARTITION BY UPPER(ecu), did) AS total
+            FROM did_drive_samples
+            WHERE success=1 AND partial=0 AND length(payload) BETWEEN 2 AND 64
+        )
+        SELECT ts_utc,ecu,did,payload
+        FROM ranked
+        WHERE seq = 1 OR seq = total OR
+              ((seq - 1) % MAX(1, total / 256)) = 0
+        ORDER BY ts_utc
+    """
     if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement {
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW {
