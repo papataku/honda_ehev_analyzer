@@ -112,7 +112,7 @@ private struct BLEConnectionView: View {
                 }
 
                 Section("使い方") {
-                    Text("KW905は名前付きBLEデバイスとして見つかる前提です。通常は「名前なしを除外」をONのまま使用してください。")
+                    Text("KW905またはM5CAN-Dialは名前付きBLEデバイスとして表示されます。通常は「名前なしを除外」をONのまま使用してください。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("デバイスを選ぶとGATT探索まで進み、readyになれば解析画面へ自動で移動します。")
@@ -143,7 +143,7 @@ private struct BLEConnectionView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Bluetoothデバイス")
                             .font(.largeTitle.bold())
-                        Text("接続するKW905を選択")
+                        Text("接続するBLE ELMデバイスを選択")
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -261,7 +261,7 @@ private struct BLEConnectionView: View {
     private var recoveryMessage: String? {
         switch model.ble.state {
         case "connect-failed":
-            return "接続に失敗しました。KW905が他のスマートフォンやCar Scannerへ接続中でないか確認して、再スキャンしてください。"
+            return "接続に失敗しました。KW905またはM5CAN-Dialが他の端末へ接続中でないか確認して、再スキャンしてください。"
         case "gatt-error":
             return "GATT情報の取得に失敗しました。アダプタの電源を入れ直してから再スキャンしてください。"
         case "bluetooth-unavailable":

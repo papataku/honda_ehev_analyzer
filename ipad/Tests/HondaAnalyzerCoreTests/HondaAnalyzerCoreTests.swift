@@ -84,6 +84,45 @@ final class HondaAnalyzerCoreTests: XCTestCase {
     }
 
     @MainActor
+    func testM5CANSessionAutomaticallyRenewsShortTxLease() async throws {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            var writes: [String] = []
+            func write(_ data: Data) throws {
+                writes.append(String(decoding: data, as: UTF8.self))
+            }
+            func emit(_ text: String) {
+                onReceive?(Data(text.utf8))
+            }
+        }
+
+        let transport = FakeTransport()
+        let session = ElmCommandSession(transport: transport)
+
+        let identify = Task { try await session.command("ATI", timeout: 1.0) }
+        await Task.yield()
+        XCTAssertEqual(transport.writes, ["ATI\r"])
+        transport.emit("M5CAN v0.3 ELM-CAN compatible\r>")
+        _ = try await identify.value
+
+        let rpm = Task { try await session.command("010C", timeout: 1.0) }
+        await Task.yield()
+        XCTAssertEqual(transport.writes.last, "ATM5TX1\r")
+        transport.emit("OK\r>")
+        await Task.yield()
+        XCTAssertEqual(transport.writes.last, "010C\r")
+        transport.emit("18DAF10104410C1F40\r>")
+        _ = try await rpm.value
+
+        let speed = Task { try await session.command("010D", timeout: 1.0) }
+        await Task.yield()
+        XCTAssertEqual(transport.writes.last, "010D\r")
+        XCTAssertEqual(transport.writes.filter { $0 == "ATM5TX1\r" }.count, 1)
+        transport.emit("18DAF10103410D2A\r>")
+        _ = try await speed.value
+    }
+
+    @MainActor
     func testElmCommandSessionBlocksUnsafeVehicleWrite() async {
         final class FakeTransport: ElmByteTransport {
             var onReceive: ((Data) -> Void)?

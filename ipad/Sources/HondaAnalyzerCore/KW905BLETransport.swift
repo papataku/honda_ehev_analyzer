@@ -18,7 +18,7 @@ public enum BLETransportError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unknownDevice: return "BLE device is no longer available"
-        case .notReady: return "KW905 BLE transport is not ready"
+        case .notReady: return "BLE ELM transport is not ready"
         }
     }
 }

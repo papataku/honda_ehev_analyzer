@@ -42,7 +42,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var observedEcus: [EcuResponder] = []
     @Published var recordingFile = ""
     @Published var recordingURL: URL?
-    @Published var statusMessage = "KW905へ接続してください"
+    @Published var statusMessage = "KW905またはM5CAN-Dialへ接続してください"
     @Published var rpm: Double?
     @Published var speedKmh: Int?
     @Published var coolantC: Int?

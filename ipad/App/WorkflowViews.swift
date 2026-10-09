@@ -25,7 +25,7 @@ struct SessionWorkflowPanel: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        WorkflowStepRow(number: 1, title: "BLE", subtitle: model.ble.connectedDeviceName ?? "KW905接続", complete: model.ble.state == "ready")
+                        WorkflowStepRow(number: 1, title: "BLE", subtitle: model.ble.connectedDeviceName ?? "BLE ELM接続", complete: model.ble.state == "ready")
                         WorkflowStepRow(number: 2, title: "記録", subtitle: "SQLite", complete: model.isRecording)
                         WorkflowStepRow(number: 3, title: "通信", subtitle: "ELM初期化", complete: model.elmInitialized)
                         WorkflowStepRow(number: 4, title: "確認", subtitle: "既知信号", complete: model.knownSignalsValidated)
@@ -71,7 +71,7 @@ struct SessionWorkflowPanel: View {
         WorkflowStep(
             number: 1,
             title: "BLE",
-            subtitle: model.ble.connectedDeviceName ?? "KW905接続",
+            subtitle: model.ble.connectedDeviceName ?? "BLE ELM接続",
             complete: model.ble.state == "ready"
         )
         WorkflowConnector(complete: model.ble.state == "ready")
@@ -110,7 +110,7 @@ struct SessionWorkflowPanel: View {
     }
 
     private var nextActionTitle: String {
-        if model.ble.state != "ready" { return "KW905へ接続" }
+        if model.ble.state != "ready" { return "BLE ELMデバイスへ接続" }
         if !model.isRecording { return "セッション記録を開始" }
         if !model.elmInitialized { return "車両通信を初期化" }
         if !model.knownSignalsValidated { return "既知信号を1回確認" }
@@ -119,7 +119,7 @@ struct SessionWorkflowPanel: View {
 
     private var nextActionDetail: String {
         if model.ble.state != "ready" {
-            return "Bluetooth接続画面でKW905を選択します。"
+            return "Bluetooth接続画面でKW905またはM5CAN-Dialを選択します。"
         }
         if !model.isRecording {
             return "先に記録を始めると、ELM初期化からRAW証拠が残ります。"

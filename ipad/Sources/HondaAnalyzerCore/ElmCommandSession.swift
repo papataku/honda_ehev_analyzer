@@ -43,7 +43,7 @@ public func elmResponseSuccess(_ text: String) -> Bool {
     let upper = text.uppercased()
     let failures = [
         "?", "ERROR", "UNABLE TO CONNECT", "BUS ERROR", "CAN ERROR",
-        "NO DATA", "STOPPED", "BUFFER FULL", "FB ERROR", "LV RESET", "ACT ALERT"
+        "NO DATA", "STOPPED", "BUFFER FULL", "FB ERROR", "LV RESET", "ACT ALERT", "M5CAN TX LOCKED", "BUSY"
     ]
     return !failures.contains { upper.contains($0) }
 }
