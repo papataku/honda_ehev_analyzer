@@ -329,7 +329,7 @@ struct VehicleSafetyBanner: View {
     var body: some View {
         if model.isDidScanPausedForSpeed {
             Label(
-                "車速を検出したためDID探索を一時停止中。走行中は010Dだけ監視し、0 km/h安定後に自動再開します。",
+                "車速検出で未知DID探索を停止中。走行中は発見済みPositive DIDと既知信号のみ収集します。0 km/hが安定し、Pを再確認したら探索を再開します。",
                 systemImage: "pause.circle.fill"
             )
             .font(.callout.weight(.semibold))
