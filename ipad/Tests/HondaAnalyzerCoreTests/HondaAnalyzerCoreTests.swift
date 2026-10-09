@@ -762,6 +762,50 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         store.flush()
     }
 
+
+    func testAdaptivePriorityPersistsAcrossSQLiteSessions() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("adaptive-state-\(UUID().uuidString).sqlite3")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let store = try CaptureStore(url: path)
+        let sid = try store.createSession()
+        let candidate = DriveDID(
+            ecu: "01", did: 0xE600,
+            responseCanID: "18DAF101", payloadLength: 3
+        )
+        let prior = AdaptiveDriveDIDScheduler(candidates: [candidate])
+        let initial = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<15 {
+            _ = prior.observe(
+                candidate, payload: Data([0x13, 0x21, 0x42]),
+                at: initial.addingTimeInterval(Double(i)),
+                context: i < 8 ? .ev : .engine
+            )
+        }
+        XCTAssertEqual(prior.summary.dormant, 1)
+        store.saveDriveSamplingState(
+            sessionID: sid, at: Date(), seeds: prior.snapshots()
+        )
+        store.flush()
+        let seeds = loadDriveSamplingSeeds(from: [path])
+        XCTAssertEqual(seeds.count, 1)
+        XCTAssertEqual(seeds[0].priority, .dormant)
+        XCTAssertEqual(seeds[0].lastPayload, Data([0x13, 0x21, 0x42]))
+        let restored = AdaptiveDriveDIDScheduler(candidates: [candidate])
+        restored.restore(seeds)
+        XCTAssertEqual(restored.summary.dormant, 1)
+        // Reconnect does not permanently suppress probing.
+        let next = restored.next(
+            now: Date(), context: .engine
+        )
+        XCTAssertEqual(next?.did, candidate.did)
+        _ = restored.observe(
+            candidate, payload: Data([0x13, 0x21, 0x43]),
+            at: Date(), context: .engine
+        )
+        XCTAssertEqual(restored.summary.active, 1)
+    }
+
 }
 
 private extension ISO8601DateFormatter {
