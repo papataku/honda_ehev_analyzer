@@ -16,7 +16,7 @@ public struct DriveDID: Hashable, Sendable, Identifiable {
 
 public func isDrivingSampleCandidate(did: UInt16, payloadLength: Int, status: String) -> Bool {
     status == "positive" &&
-        payloadLength >= 2 && payloadLength <= 64 &&
+        payloadLength >= 1 && payloadLength <= 64 &&
         !(0xF100...0xF1FF).contains(Int(did))
 }
 
@@ -32,7 +32,7 @@ public func loadDriveDIDCandidates(from urls: [URL], limit: Int? = nil) -> [Driv
         defer { sqlite3_close(db) }
         let sql = """
             SELECT UPPER(ecu), did, response_can_id, length(payload), status
-            FROM did_scan WHERE status='positive' AND length(payload) BETWEEN 2 AND 64
+            FROM did_scan WHERE status='positive' AND length(payload) BETWEEN 1 AND 64
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
@@ -358,7 +358,7 @@ public func analyzeDriveCapture(_ url: URL) -> [DriveFieldCandidate] {
                    ROW_NUMBER() OVER (PARTITION BY UPPER(ecu), did ORDER BY ts_utc) AS seq,
                    COUNT(*) OVER (PARTITION BY UPPER(ecu), did) AS total
             FROM did_drive_samples
-            WHERE success=1 AND partial=0 AND length(payload) BETWEEN 2 AND 64
+            WHERE success=1 AND partial=0 AND length(payload) BETWEEN 1 AND 64
         )
         SELECT ts_utc,ecu,did,payload
         FROM ranked
@@ -374,7 +374,7 @@ public func analyzeDriveCapture(_ url: URL) -> [DriveFieldCandidate] {
                   let time = didDriveDate(String(cString: ts)),
                   sqlite3_column_type(statement, 3) != SQLITE_NULL else { continue }
             let n = Int(sqlite3_column_bytes(statement, 3))
-            guard n >= 2 && n <= 64, let raw = sqlite3_column_blob(statement, 3) else { continue }
+            guard n >= 1 && n <= 64, let raw = sqlite3_column_blob(statement, 3) else { continue }
             samples.append(DrivePayloadSample(
                 time: time, ecu: String(cString: ecu),
                 did: UInt16(truncatingIfNeeded: sqlite3_column_int64(statement, 2)),
