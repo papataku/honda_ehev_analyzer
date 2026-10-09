@@ -645,6 +645,123 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertTrue(mayResumeUnknownDID(stableZero: true, parkingConfirmed: true))
     }
 
+
+    func testAdaptiveDrivePollingSuspendsUnchangedButNeverPermanentlyDropsDID() {
+        let candidate = DriveDID(
+            ecu: "01", did: 0xE480, responseCanID: "18DAF101", payloadLength: 4
+        )
+        let scheduler = AdaptiveDriveDIDScheduler(candidates: [candidate])
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let same = Data([0x00, 0x11, 0x22, 0x33])
+        for i in 0..<15 {
+            let context: DriveOperatingContext = i < 8 ? .ev : .engine
+            _ = scheduler.observe(
+                candidate, payload: same,
+                at: t.addingTimeInterval(Double(i) * 2), context: context
+            )
+        }
+        XCTAssertEqual(scheduler.summary.total, 1)
+        XCTAssertEqual(scheduler.summary.dormant, 1)
+        XCTAssertNil(scheduler.next(
+            now: t.addingTimeInterval(32), context: .engine
+        ))
+
+        // A new driving condition wakes up a dormant candidate.
+        let recheck = scheduler.next(
+            now: t.addingTimeInterval(33), context: .regeneration
+        )
+        XCTAssertEqual(recheck?.did, candidate.did)
+        let wake = scheduler.observe(
+            candidate, payload: Data([0, 0x11, 0x23, 0x33]),
+            at: t.addingTimeInterval(33), context: .regeneration
+        )
+        XCTAssertEqual(wake?.current, .active)
+        XCTAssertEqual(scheduler.summary.active, 1)
+        XCTAssertEqual(scheduler.summary.dormant, 0)
+    }
+
+    func testAdaptiveDrivePollingErrorsBackOffWithoutFalseStableDecision() {
+        let candidate = DriveDID(
+            ecu: "01", did: 0xE600, responseCanID: "18DAF101", payloadLength: 2
+        )
+        let scheduler = AdaptiveDriveDIDScheduler(candidates: [candidate])
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for i in 0..<12 {
+            _ = scheduler.observe(
+                candidate, payload: nil,
+                at: t.addingTimeInterval(Double(i) * 60), context: .ev
+            )
+        }
+        XCTAssertEqual(scheduler.summary.failedSamples, 12)
+        XCTAssertEqual(scheduler.summary.dormant, 0)
+        XCTAssertEqual(scheduler.summary.learning, 1)
+        XCTAssertNil(scheduler.next(
+            now: t.addingTimeInterval(11 * 60 + 5),
+            context: .ev
+        ))
+    }
+
+    func testAdaptiveSchedulerMaintainsBeyond24PositiveDIDs() {
+        let candidates: [DriveDID] = (0..<100).map { index in
+            DriveDID(
+                ecu: "01",
+                did: UInt16(0xE400 + index),
+                responseCanID: "18DAF101",
+                payloadLength: 4
+            )
+        }
+        let scheduler = AdaptiveDriveDIDScheduler(candidates: candidates)
+        XCTAssertEqual(scheduler.summary.total, 100)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        var observed = Set<String>()
+        for index in 0..<100 {
+            guard let next = scheduler.next(
+                now: start, context: .ev
+            ) else {
+                XCTFail("candidate unexpectedly missing at index \(index)")
+                return
+            }
+            observed.insert(next.id)
+            _ = scheduler.observe(
+                next, payload: Data([0, 0, 0, 1]),
+                at: start, context: .ev
+            )
+        }
+        XCTAssertEqual(observed.count, 100)
+        scheduler.addCandidates(candidates)
+        XCTAssertEqual(scheduler.summary.total, 100)
+        scheduler.addCandidates([
+            DriveDID(ecu: "01", did: 0xF200, responseCanID: "18DAF101", payloadLength: 4)
+        ])
+        XCTAssertEqual(scheduler.summary.total, 101)
+    }
+
+    func testHistoricalPositiveInventoryIsNotLimitedTo24Entries() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("adaptive-drive-\(UUID().uuidString).sqlite3")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let store = try CaptureStore(url: path)
+        let sid = try store.createSession()
+        for index in 0..<35 {
+            store.saveDidScan(
+                sessionID: sid, at: Date(),
+                outcome: DidProbeOutcome(
+                    ecu: "01", did: UInt16(0xE400 + index),
+                    status: .positive, payload: Data([0x00, 0x01]),
+                    responseCanID: "18DAF101"
+                )
+            )
+        }
+        store.flush()
+        XCTAssertEqual(loadDriveDIDCandidates(from: [path]).count, 35)
+        XCTAssertEqual(loadDriveDIDCandidates(from: [path], limit: 24).count, 24)
+        store.saveDrivePlan(
+            sessionID: sid, at: Date(),
+            candidates: loadDriveDIDCandidates(from: [path])
+        )
+        store.flush()
+    }
+
 }
 
 private extension ISO8601DateFormatter {
