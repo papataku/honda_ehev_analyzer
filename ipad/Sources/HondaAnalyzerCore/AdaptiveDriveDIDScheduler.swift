@@ -41,6 +41,30 @@ public struct DriveSamplingChange: Sendable {
     public let reason: String
 }
 
+public struct DriveSamplingSeed: Sendable {
+    public let ecu: String
+    public let did: UInt16
+    public let priority: DriveSamplingPriority
+    public let lastPayload: Data?
+    public let unchanged: Int
+    public let contexts: [DriveOperatingContext]
+
+    public init(
+        ecu: String, did: UInt16,
+        priority: DriveSamplingPriority, lastPayload: Data?,
+        unchanged: Int, contexts: [DriveOperatingContext]
+    ) {
+        self.ecu = ecu
+        self.did = did
+        self.priority = priority
+        self.lastPayload = lastPayload
+        self.unchanged = unchanged
+        self.contexts = contexts
+    }
+
+    public var id: String { "\(ecu)-\(String(format: "%04X", did))" }
+}
+
 /// Scheduling policy:
 /// - Learning entries get baseline samples even if the catalogue grows.
 /// - A changing payload is sampled more often.
@@ -75,6 +99,34 @@ public final class AdaptiveDriveDIDScheduler {
     public func addCandidates(_ candidates: [DriveDID]) {
         for candidate in candidates where entries[candidate.id] == nil {
             entries[candidate.id] = Entry(candidate: candidate)
+        }
+    }
+
+    /// Save a compact verified baseline; all entries are due for at least one
+    /// fresh check after reconnect, even if previously dormant.
+    public func snapshots() -> [DriveSamplingSeed] {
+        entries.values.map { entry in
+            DriveSamplingSeed(
+                ecu: entry.candidate.ecu,
+                did: entry.candidate.did,
+                priority: entry.priority,
+                lastPayload: entry.lastPayload,
+                unchanged: entry.unchanged,
+                contexts: entry.contexts.sorted { $0.rawValue < $1.rawValue }
+            )
+        }
+    }
+
+    public func restore(_ saved: [DriveSamplingSeed]) {
+        for seed in saved {
+            guard var entry = entries[seed.id] else { continue }
+            entry.priority = seed.priority
+            entry.lastPayload = seed.lastPayload
+            entry.unchanged = max(0, seed.unchanged)
+            entry.contexts = Set(seed.contexts)
+            // A new recording always checks historical priorities anew.
+            entry.nextDue = .distantPast
+            entries[seed.id] = entry
         }
     }
 
