@@ -373,17 +373,28 @@ private struct DiscoveryPage: View {
 
                             ProgressView(value: model.didScanProgress)
                         } else {
-                            HStack(spacing: 12) {
-                                Button("④ 少範囲で試す（2000–20FF）") {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 230), spacing: 12)],
+                                spacing: 12
+                            ) {
+                                Button {
                                     model.startDidScan2000Range()
+                                } label: {
+                                    Label("④ まず少範囲で試す", systemImage: "magnifyingglass")
+                                        .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
                                 .disabled(!canStartScan)
 
-                                Button("④ 全範囲を探索（長時間）") {
+                                Button {
                                     showFullScanConfirmation = true
+                                } label: {
+                                    Label("④ 全範囲を探索（長時間）", systemImage: "square.grid.3x3")
+                                        .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.bordered)
+                                .controlSize(.large)
                                 .disabled(!canStartScan)
                             }
 
@@ -756,7 +767,7 @@ private struct SettingsPage: View {
                             Text("50").tag(50.0)
                             Text("100").tag(100.0)
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
                         .disabled(model.livePollingUnthrottled || model.isLivePolling)
 
                         Toggle(
@@ -779,7 +790,7 @@ private struct SettingsPage: View {
                             Text("50").tag(50.0)
                             Text("100").tag(100.0)
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
                         .disabled(model.didScanUnthrottled || model.isDidScanning)
 
                         Toggle(
