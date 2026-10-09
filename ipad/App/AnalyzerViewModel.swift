@@ -176,6 +176,14 @@ final class AnalyzerViewModel: ObservableObject {
 
         let targetRate = max(1.0, livePollingRequestRateHz)
         let unthrottled = livePollingUnthrottled
+        if let store = captureStore, let sid = captureSessionID {
+            store.addEvent(
+                sessionID: sid,
+                at: Date(),
+                kind: "LIVE_POLL_CONFIG",
+                note: "target_req_s=\(targetRate) unthrottled=\(unthrottled)"
+            )
+        }
         statusMessage = unthrottled
             ? "既知信号ライブ取得中：アプリ側レート制限なし"
             : "既知信号ライブ取得中：目標 \(targetRate.formatted()) req/s"
@@ -357,6 +365,15 @@ final class AnalyzerViewModel: ObservableObject {
             var timingTouched = false
 
             do {
+                store.addEvent(
+                    sessionID: sid,
+                    at: Date(),
+                    kind: "DID_SCAN_CONFIG",
+                    note: "ecu=\(ecu) start=\(String(format: "%04X", start)) " +
+                        "end=\(String(format: "%04X", end)) adaptive=\(adaptive) " +
+                        "target_req_s=\(rate) unthrottled=\(unthrottled) " +
+                        "aggressive_timing=\(aggressiveElmTimingEnabled)"
+                )
                 store.flush()
                 let historyURLs = captureDatabaseURLs()
                 let history = loadDidScanHistory(
@@ -615,6 +632,13 @@ final class AnalyzerViewModel: ObservableObject {
                 for command in timing.restore { _ = try? await commandIgnoringFailure(command) }
             }
             activeHeaderCommand = nil
+            store.addEvent(
+                sessionID: sid,
+                at: Date(),
+                kind: "DID_SCAN_END",
+                note: "ecu=\(ecu) current=\(didScanCurrent) " +
+                    String(format: "effective_did_s=%.2f", didScanEffectiveRateHz)
+            )
             store.flush()
             refreshPositiveDids()
             isDidScanPausedForSpeed = false
