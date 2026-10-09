@@ -69,7 +69,9 @@ struct FinalAnalyzerWorkspace: View {
                         onOpenDiscovery: { selection = .discovery }
                     )
                 case .driving:
-                    DrivingAnalysisPage(model: model)
+                    DrivingAnalysisPage(model: model) {
+                        selection = .discovery
+                    }
                 case .discovery:
                     DiscoveryPage(model: model)
                 case .sessions:
