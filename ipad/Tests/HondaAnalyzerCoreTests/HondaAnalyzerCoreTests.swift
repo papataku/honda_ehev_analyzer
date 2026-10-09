@@ -634,6 +634,14 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         store.flush()
     }
 
+
+    func testUnknownScanResumeRequiresStableZeroAndFreshParkConfirmation() {
+        XCTAssertFalse(mayResumeUnknownDID(stableZero: false, parkingConfirmed: false))
+        XCTAssertFalse(mayResumeUnknownDID(stableZero: true, parkingConfirmed: false))
+        XCTAssertFalse(mayResumeUnknownDID(stableZero: false, parkingConfirmed: true))
+        XCTAssertTrue(mayResumeUnknownDID(stableZero: true, parkingConfirmed: true))
+    }
+
 }
 
 private extension ISO8601DateFormatter {
