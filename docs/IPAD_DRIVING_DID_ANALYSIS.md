@@ -45,7 +45,7 @@ Read-only SQLite `did_scan` history across local iPad captures. Inclusion:
 - valid ECU source, expected responder `18DAF1xx`;
 - exclude `F100..F1FF` ECU identity/coding-style data;
 - exclude `positive_partial` and negative/no-data outcomes;
-- bounded first 16 candidates in deterministic DID order (0x2xxx then 0xExxx).
+- no fixed 16/24 candidate truncation; all eligible historical responders are managed with adaptive sampling
 
 Potential candidates based on uploaded logs include `2012`, `E480`, `E481`, `E600`, `E602`, but **none is automatically declared to be motor RPM**.
 
@@ -87,3 +87,24 @@ Use a passenger or parked operation. Never handle the iPad while driving.
 - ELM commands stay strictly serialized; no concurrent live/drive/scan tasks.
 - SQLite can be cleanly finalized and replayed after the task stops.
 - The same candidate can be ranked independently across two sessions with consistent scale/offset.
+
+
+## Adaptive acquisition after many Positive DIDs
+
+There is no fixed 24-DID ceiling. Every eligible historical complete Positive UDS 0x22 responder is retained in the scheduler, keyed by ECU and DID. F100–F1FF identity-oriented and partial-response identifiers remain excluded from driving scans; baseline known Mode 01 PIDs are always polled for reference and safety.
+
+| Priority | Evidence | Next check target |
+|---|---|---|
+| Learning | New Positive DID | about 1 second |
+| Active | Reassembled payload changes | about 0.8 seconds |
+| Watch | 7 unchanged comparisons | about 12 seconds |
+| Dormant | 12 unchanged comparisons across at least 2 moving contexts | about 90 seconds |
+| Individual failed responses | Transport / UDS failure, not evidence of stability | 5/10/20/40/60 second exponential retry |
+
+Intervals are **scheduling targets rather than guarantees**. A limited BLE/ELM/ECU link cannot poll hundreds of changing DIDs at 1 Hz; the planner prioritizes changing values and dedicates one in four available opportunities to learning/sparse rechecks. Operating-mode changes wake suppressed candidates earlier. Any newly changed payload returns to Active. Nothing is permanently discarded merely because it was constant during one trip.
+
+The Driving Analysis page shows total, learning, active, watch and dormant counts. The screen only lists the first 48 identifiers to keep it readable, **but all eligible identifiers remain managed**. SQLite stores the entire DID plan, actual complete samples, and priority-transition events for reproducibility.
+
+For large captures, offline candidate analysis reads time-spanning sampled rows per DID (typically a few hundred) while leaving the SQLite source untouched; the computation is off the main SwiftUI actor so the interface can still respond.
+
+Limitations: priority states are relearned at the start of a fresh recording, not yet persisted across sessions. Suppression tests compare complete payload bytes; counters or checksums that change even when physical fields do not may keep a DID in Active. Field-level noise detection and cross-session priority caching are future improvements. Being 'Active' does not prove a motor or generator signal.
