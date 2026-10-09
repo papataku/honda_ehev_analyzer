@@ -4,6 +4,7 @@ import HondaAnalyzerCore
 struct DrivingAnalysisPage: View {
     @ObservedObject var model: AnalyzerViewModel
     let onOpenDiscovery: () -> Void
+    let onOpenDashboard: () -> Void
 
     var body: some View {
         ScrollView {
@@ -36,16 +37,25 @@ struct DrivingAnalysisPage: View {
                             satisfied: !model.driveCandidates.isEmpty,
                             note: "未発見なら、停車・P確認後に探索してください"
                         )
-                        if !model.driveCandidates.isEmpty {
-                            StatusPill(
-                                text: "走行解析の準備状況を確認してください",
-                                systemImage: "info.circle",
-                                style: .neutral
-                            )
+                        if model.isDriveCollecting {
+                            StatusPill(text: "安全に停車するまで収集を続けています", systemImage: "record.circle.fill", style: .active)
+                        } else if canStart {
+                            StatusPill(text: "走行解析を開始できます", systemImage: "checkmark.circle.fill", style: .good)
+                        } else {
+                            Text("未完了の項目を確認してください。開始できない理由は下の収集カードにも表示されます。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Text("操作できないボタンには準備不足などの理由があります。必要な項目を上から確認してください。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        if model.ble.state != "ready" || !model.isRecording ||
+                            !model.elmInitialized || !model.knownSignalsValidated {
+                            Button {
+                                onOpenDashboard()
+                            } label: {
+                                Label("ダッシュボードで開始準備", systemImage: "arrow.right")
+                            }
+                            .buttonStyle(.bordered)
+                        }
                         if model.driveCandidates.isEmpty {
                             Button {
                                 onOpenDiscovery()
