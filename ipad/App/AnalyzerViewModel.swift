@@ -27,6 +27,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var driveCurrent = "未開始"
     @Published var driveCandidates: [DriveDID] = []
     @Published var driveFieldCandidates: [DriveFieldCandidate] = []
+    @Published var analyzedRecordingName = ""
     @Published var isDidScanPausedForSpeed = false
     @Published var autoResumeDidScanAfterStop = true
     @Published var isRecording = false
@@ -695,16 +696,17 @@ final class AnalyzerViewModel: ObservableObject {
         driveCandidates = loadDriveDIDCandidates(from: captureDatabaseURLs(), limit: 16)
     }
 
-    func analyzeDriveRecording() {
+    func analyzeDriveRecording(_ url: URL? = nil) {
         guard !isDriveCollecting, !isDidScanning, !isLivePolling,
-              let url = recordingURL else {
+              let captureURL = url ?? recordingURL else {
             statusMessage = "収集を停止してから解析してください"
             return
         }
         captureStore?.flush()
-        driveFieldCandidates = analyzeDriveCapture(url)
+        driveFieldCandidates = analyzeDriveCapture(captureURL)
+        analyzedRecordingName = captureURL.lastPathComponent
         statusMessage = driveFieldCandidates.isEmpty
-            ? "解析候補なし：同じDIDを走行中に8回以上取得し、速度やRPMが変化するログが必要です"
+            ? "候補なし：同じDIDを走行中に8回以上取得し、車速/RPMの変化があるログが必要"
             : "走行時系列を解析しました（候補 \(driveFieldCandidates.count)件、意味は未確定）"
     }
 
