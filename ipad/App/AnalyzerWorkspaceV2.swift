@@ -408,8 +408,6 @@ private struct DiscoveryPage: View {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.orange)
                             }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
 
                         DisclosureGroup("探索設定") {
