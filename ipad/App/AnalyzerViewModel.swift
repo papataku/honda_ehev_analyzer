@@ -1165,33 +1165,42 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     private func pollKnownCycle(requireComplete: Bool = false) async throws {
-        let rpmResult = try await session.command("010C")
-        append(rpmResult)
-        let rpmValue = decodeEngineRPM(rpmResult.text)
+        let keys = ["010C", "010D", "0105", "015B", "019A"]
+        let texts: [String]
+        let successes: [Bool]
+        if session.negotiatedM5CAN?.supportsOBD01 == true {
+            // Five RPM/speed/coolant/SOC/HV requests, one BLE round-trip.
+            // The device still serializes the five ECU queries.
+            let (result, batch) = try await session.batchRead(
+                group: .mode01, ids: keys, timeout: 10.0
+            )
+            append(result)
+            texts = batch.items.map(\.responseText)
+            successes = texts.map(elmResponseSuccess)
+        } else {
+            var results: [ElmCommandResult] = []
+            for key in keys {
+                let result = try await session.command(key)
+                append(result)
+                results.append(result)
+            }
+            texts = results.map(\.text)
+            successes = results.map(\.success)
+        }
 
-        let speedResult = try await session.command("010D")
-        append(speedResult)
-        let speedValue = decodeVehicleSpeed(speedResult.text)
-
-        let coolantResult = try await session.command("0105")
-        append(coolantResult)
-        let coolantValue = decodeCoolantC(coolantResult.text)
-
-        let socResult = try await session.command("015B")
-        append(socResult)
-        let socValue = decodeBatterySOC(socResult.text)
-
-        let hybridResult = try await session.command("019A")
-        append(hybridResult)
-        let hybridValue = decodeHybridEv9A(hybridResult.text)
+        let rpmValue = decodeEngineRPM(texts[0])
+        let speedValue = decodeVehicleSpeed(texts[1])
+        let coolantValue = decodeCoolantC(texts[2])
+        let socValue = decodeBatterySOC(texts[3])
+        let hybridValue = decodeHybridEv9A(texts[4])
 
         if requireComplete {
             let complete =
-                rpmResult.success && rpmValue != nil &&
-                speedResult.success && speedValue != nil &&
-                coolantResult.success && coolantValue != nil &&
-                socResult.success && socValue != nil &&
-                hybridResult.success && hybridValue != nil
+                successes[0] && rpmValue != nil &&
+                successes[1] && speedValue != nil &&
+                successes[2] && coolantValue != nil &&
+                successes[3] && socValue != nil &&
+                successes[4] && hybridValue != nil
 
             guard complete else {
                 throw NSError(
