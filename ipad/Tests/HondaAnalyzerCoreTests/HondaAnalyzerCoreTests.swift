@@ -2,6 +2,67 @@ import XCTest
 @testable import HondaAnalyzerCore
 
 final class HondaAnalyzerCoreTests: XCTestCase {
+    func testM5CANCapabilityVersionNegotiationAndFallback() {
+        let good = "M5CAN-CAPS PROTO=1.0 FW=0.3.3-phase3d-ble BATCH=16 OPS=OBD01,UDS22 STREAM=0\r>"
+        let supported = M5CANCapabilities.parse(good)
+        XCTAssertEqual(supported?.major, 1)
+        XCTAssertEqual(supported?.minor, 0)
+        XCTAssertEqual(supported?.firmwareVersion, "0.3.3-phase3d-ble")
+        XCTAssertEqual(supported?.maxBatchIDs, 16)
+        XCTAssertEqual(supported?.supportsOBD01, true)
+        XCTAssertEqual(supported?.supportsUDS22, true)
+        XCTAssertEqual(supported?.supportsStreaming, false)
+        XCTAssertNotNil(M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=1.1 FW=0.4.0 BATCH=8 OPS=OBD01 STREAM=0>"
+        ))
+        XCTAssertNil(M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=2.0 FW=2.0 BATCH=16 OPS=OBD01,UDS22 STREAM=1>"
+        ))
+        XCTAssertNil(M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=1.0 FW=0.3 BATCH=64 OPS=OBD01 STREAM=0>"
+        ))
+        XCTAssertNil(M5CANCapabilities.parse("ELM327 v1.5>"))
+        XCTAssertNil(M5CANCapabilities.parse("M5CAN v0.3 ELM-CAN compatible>"))
+        XCTAssertNil(M5CANCapabilities.parse("?"))
+    }
+
+    func testM5CANBatchBuildAndTaggedParse() {
+        let mode = M5CANBatchGroup.mode01
+        let pids = ["010C", "010D", "0105", "015B", "019A"]
+        XCTAssertEqual(mode.command(ids: pids, capacity: 16),
+                       "ATM5B00:010C,010D,0105,015B,019A")
+        XCTAssertNil(mode.command(ids: ["2E12"], capacity: 16))
+        XCTAssertNil(mode.command(ids: Array(repeating: "010C", count: 17), capacity: 16))
+        XCTAssertEqual(M5CANBatchGroup.ecu01ReadDID.command(ids: ["2012"], capacity: 16),
+                       "ATM5B01:2012")
+
+        let reply = """
+        M5ITEM:00:010C\r
+        18DAF10104410C144C\r
+        M5ITEM:00:010D\r
+        18DAF10103410D28\r
+        M5ITEM:00:0105\r
+        18DAF10103410555\r
+        M5ITEM:00:015B\r
+        NO DATA\r
+        M5ITEM:00:019A\r
+        18DAF1011008419A0700401F\r
+        18DAF1012100035555555555\r
+        M5DONE\r>
+        """
+        let parsed = M5CANBatchResponse.parse(reply, group: mode, ids: pids)
+        XCTAssertEqual(parsed?.items.count, 5)
+        XCTAssertEqual(parsed?.items[0].key, "00:010C")
+        XCTAssertEqual(parsed?.items[3].responseText, "NO DATA")
+        XCTAssertTrue(parsed?.items[4].responseText.contains("18DAF10121") == true)
+        XCTAssertNil(M5CANBatchResponse.parse(
+            reply.replacingOccurrences(of: "M5DONE", with: "BUSY"),
+            group: mode, ids: pids))
+        XCTAssertNil(M5CANBatchResponse.parse(
+            reply.replacingOccurrences(of: "M5ITEM:00:010D", with: "M5ITEM:00:010C"),
+            group: mode, ids: pids))
+    }
+
     func testPromptFramerHandlesFragmentsAndMergedResponses() {
         let framer = ElmPromptFramer()
         XCTAssertTrue(framer.feed(Data("41 0C".utf8)).isEmpty)
