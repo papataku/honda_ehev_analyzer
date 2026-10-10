@@ -22,5 +22,7 @@ public final class ElmPromptFramer: @unchecked Sendable {
         return responses
     }
 
+    public func reset() { buffer.removeAll(keepingCapacity: true) }
+
     public var pending: Data { buffer }
 }
