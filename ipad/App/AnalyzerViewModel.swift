@@ -855,26 +855,10 @@ final class AnalyzerViewModel: ObservableObject {
                         var budget = 4
                         while budget > 0 {
                             try Task.checkCancellation()
-                            guard let first = scheduler.next(
-                                now: Date(), context: drivingContext
-                            ) else { break }
-                            var selected = [first]
-                            if first.ecu == "01",
-                               !udsBatchUnavailableForConnection,
-                               let caps = session.negotiatedM5CAN, caps.supportsUDS22 {
-                                let capacity = min(budget, caps.maxBatchIDs)
-                                if capacity > 1 {
-                                    for _ in 1..<capacity {
-                                        let reservedIDs = Set(selected.map(\.id))
-                                        guard let next = scheduler.next(
-                                            now: Date(), context: drivingContext,
-                                            excluding: reservedIDs, ecuOnly: "01"
-                                        ) else { break }
-                                        selected.append(next)
-                                    }
-                                }
-                            }
-
+                            let selected = reserveVerifiedDriveBatch(
+                                scheduler: scheduler, maximum: budget
+                            )
+                            guard !selected.isEmpty else { break }
                             let outcomes = await sampleKnownDrivingDIDs(selected)
                             for (candidate, outcome) in zip(selected, outcomes) {
                                 let success = recordAdaptiveDriveSample(
@@ -931,6 +915,33 @@ final class AnalyzerViewModel: ObservableObject {
     func stopDriveCollection() {
         driveCaptureTask?.cancel()
         statusMessage = "走行解析収集を終了中。現在の要求完了を待っています"
+    }
+
+    /// Reserve at most 'maximum' distinct due DIDs. Batching is ECU01-only
+    /// because ATM5B01 routes to physical ECU01; an ECU02 read must never be
+    /// relabelled as ECU01. Legacy adapters reserve one candidate at a time.
+    private func reserveVerifiedDriveBatch(
+        scheduler: AdaptiveDriveDIDScheduler, maximum: Int
+    ) -> [DriveDID] {
+        guard maximum > 0,
+              let first = scheduler.next(now: Date(), context: drivingContext)
+        else { return [] }
+        var reserved = [first]
+        guard first.ecu == "01",
+              !udsBatchUnavailableForConnection,
+              let caps = session.negotiatedM5CAN, caps.supportsUDS22
+        else { return reserved }
+        let count = min(maximum, caps.maxBatchIDs)
+        if count > 1 {
+            for _ in 1..<count {
+                guard let candidate = scheduler.next(
+                    now: Date(), context: drivingContext,
+                    excluding: Set(reserved.map(\.id)), ecuOnly: "01"
+                ) else { break }
+                reserved.append(candidate)
+            }
+        }
+        return reserved
     }
 
     /// Only ECU01 DIDs previously verified by the candidate loader are
@@ -1080,10 +1091,11 @@ final class AnalyzerViewModel: ObservableObject {
 
             if let speed, speed > 0 {
                 stationaryConfirmed = false
-                if let candidate = scheduler.next(
-                    now: Date(), context: drivingContext
-                ) {
-                    let outcome = await sampleKnownDrivingDID(candidate)
+                let selected = reserveVerifiedDriveBatch(
+                    scheduler: scheduler, maximum: 4
+                )
+                let outcomes = await sampleKnownDrivingDIDs(selected)
+                for (candidate, outcome) in zip(selected, outcomes) {
                     _ = recordAdaptiveDriveSample(
                         candidate, outcome: outcome, scheduler: scheduler,
                         store: store, sessionID: sessionID
