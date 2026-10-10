@@ -145,9 +145,11 @@ public final class ElmCommandSession {
         let lease = try await sendCommand("ATM5TX1", timeout: 2.0)
         guard lease.success else { throw ElmCommandError.m5canLeaseFailed(lease.text) }
         let response = try await sendCommand(command, timeout: timeout)
-        guard response.success,
-              let parsed = M5CANBatchResponse.parse(response.text, group: group, ids: ids)
-        else { throw ElmCommandError.dedicatedModeUnavailable }
+        // A single ECU may return NO DATA within an otherwise well-framed
+        // batch. Preserve per-item results rather than discarding all samples.
+        guard let parsed = M5CANBatchResponse.parse(
+            response.text, group: group, ids: ids
+        ) else { throw ElmCommandError.dedicatedModeUnavailable }
         return (response, parsed)
     }
 
