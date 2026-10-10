@@ -15,6 +15,11 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertNotNil(M5CANCapabilities.parse(
             "M5CAN-CAPS PROTO=1.1 FW=0.4.0 BATCH=8 OPS=OBD01 STREAM=0>"
         ))
+        let future = M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=1.2 FW=0.5.0 BATCH=8 OPS=OBD01,RAWCAN STREAM=0>"
+        )
+        XCTAssertEqual(future?.supportsOBD01, true)
+        XCTAssertEqual(future?.supportsUDS22, false)
         XCTAssertNil(M5CANCapabilities.parse(
             "M5CAN-CAPS PROTO=2.0 FW=2.0 BATCH=16 OPS=OBD01,UDS22 STREAM=1>"
         ))
