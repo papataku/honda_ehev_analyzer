@@ -751,7 +751,15 @@ private struct SettingsPage: View {
                         "通信方式・版数",
                         value: model.vehicleProtocolLabel
                     )
-                    Text("接続先のATIと専用機能確認を照合します。対応M5CANだけ一括取得を使用し、KW905・旧ファーム・未対応の将来版は標準ELM327通信です。")
+                    LabeledContent(
+                        "直近の取得経路",
+                        value: model.activeReadPathLabel
+                    )
+                    LabeledContent(
+                        "UDSバッチ状態",
+                        value: model.udsBatchStatusLabel
+                    )
+                    Text("ライブ監視のMode01と走行中の確認済みECU01 DIDは、対応M5CANで個別CAN要求をBLEバッチ化します。未知DID探索・他ECUは安全のため個別要求です。バッチ失敗時は個別通信へ切り替え、SQLiteに理由を保存します。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Bluetooth接続画面を開く") {

@@ -14,12 +14,15 @@ final class AnalyzerViewModel: ObservableObject {
     private var driveScheduler: AdaptiveDriveDIDScheduler?
     private var didScanStopRequested = false
     private var activeHeaderCommand: String?
+    private var udsBatchUnavailableForConnection = false
     private var priority18Configured = false
     private var bleObservation: AnyCancellable?
     private var bleStateObservation: AnyCancellable?
 
     @Published var isBusy = false
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
+    @Published var activeReadPathLabel = "未取得"
+    @Published var udsBatchStatusLabel = "未使用"
     @Published var elmInitialized = false
     @Published var knownSignalsValidated = false
     @Published var isLivePolling = false
@@ -82,6 +85,9 @@ final class AnalyzerViewModel: ObservableObject {
                 self.elmInitialized = false
                 self.knownSignalsValidated = false
                 self.vehicleProtocolLabel = "未確認（ELM327互換）"
+                self.activeReadPathLabel = "未取得"
+                self.udsBatchStatusLabel = "未使用"
+                self.udsBatchUnavailableForConnection = false
                 self.stationaryConfirmed = false
                 self.observedEcus = []
                 self.activeHeaderCommand = nil
@@ -117,6 +123,9 @@ final class AnalyzerViewModel: ObservableObject {
             // known-signal evidence are present in that SQLite file.
             session.resetProtocolNegotiation()
             vehicleProtocolLabel = "未確認（ELM327互換）"
+            activeReadPathLabel = "未取得"
+            udsBatchStatusLabel = "未使用"
+            udsBatchUnavailableForConnection = false
             elmInitialized = false
             knownSignalsValidated = false
             stationaryConfirmed = false
@@ -164,12 +173,16 @@ final class AnalyzerViewModel: ObservableObject {
         statusMessage = "ELM初期化中"
         Task {
             let results = await session.initialize()
+            udsBatchUnavailableForConnection = false
+            activeReadPathLabel = "未取得"
+            udsBatchStatusLabel = "未使用"
             activeHeaderCommand = nil
             priority18Configured = false
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             if let caps = session.negotiatedM5CAN {
                 vehicleProtocolLabel = caps.description
+                udsBatchStatusLabel = caps.supportsUDS22 ? "対応・未試行" : "非対応（個別通信）"
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
@@ -178,6 +191,7 @@ final class AnalyzerViewModel: ObservableObject {
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
+                udsBatchStatusLabel = "非対応（個別通信）"
             }
             elmInitialized = failed.isEmpty
             if !elmInitialized { knownSignalsValidated = false }
@@ -840,37 +854,43 @@ final class AnalyzerViewModel: ObservableObject {
                     try await pollKnownCycle()
                     if let speed = speedKmh, speed > 0 {
                         stationaryConfirmed = false
-                        for _ in 0..<4 {
+                        // Up to four verified DIDs per cycle. M5CAN can send
+                        // ECU01 reads in one BLE exchange; ECU CAN transactions
+                        // remain serialized by firmware. Other ECUs stay on the
+                        // read-only ELM request path.
+                        var budget = 4
+                        while budget > 0 {
                             try Task.checkCancellation()
-                            guard let candidate = scheduler.next(
-                                now: Date(), context: drivingContext
-                            ) else { break }
-                            let outcome = await sampleKnownDrivingDID(candidate)
-                            let success = recordAdaptiveDriveSample(
-                                candidate, outcome: outcome, scheduler: scheduler,
-                                store: store, sessionID: sid
+                            let selected = reserveVerifiedDriveBatch(
+                                scheduler: scheduler, maximum: budget
                             )
-                            consecutiveTransportErrors = success ? 0 : consecutiveTransportErrors + 1
-                            driveCurrent = "\(candidate.label) / \(driveCollectedCount)件保存 / " +
-                                "\(driveSamplingSummary.dormant)件は低頻度再確認"
-                            if consecutiveTransportErrors >= 12 {
-                                // Historical responders may disappear or reject a
-                                // request in a new session. Back off each DID,
-                                // without aborting sampling of other ECU sources.
-                                if ble.state != "ready" {
-                                    throw NSError(
-                                        domain: "HondaAnalyzer.DriveCapture", code: 1,
-                                        userInfo: [NSLocalizedDescriptionKey:
-                                            "BLE切断により解析を停止しました"]
-                                    )
-                                }
-                                store.addEvent(
-                                    sessionID: sid, at: Date(),
-                                    kind: "DRIVE_DID_RETRY_BACKOFF",
-                                    note: "12 consecutive failures; individual DID retries remain scheduled"
+                            guard !selected.isEmpty else { break }
+                            let outcomes = await sampleKnownDrivingDIDs(selected)
+                            for (candidate, outcome) in zip(selected, outcomes) {
+                                let success = recordAdaptiveDriveSample(
+                                    candidate, outcome: outcome, scheduler: scheduler,
+                                    store: store, sessionID: sid
                                 )
-                                consecutiveTransportErrors = 0
+                                consecutiveTransportErrors = success ? 0 : consecutiveTransportErrors + 1
+                                driveCurrent = "\(candidate.label) / \(driveCollectedCount)件保存 / " +
+                                    "\(driveSamplingSummary.dormant)件は低頻度再確認"
+                                if consecutiveTransportErrors >= 12 {
+                                    if ble.state != "ready" {
+                                        throw NSError(
+                                            domain: "HondaAnalyzer.DriveCapture", code: 1,
+                                            userInfo: [NSLocalizedDescriptionKey:
+                                                "BLE切断により解析を停止しました"]
+                                        )
+                                    }
+                                    store.addEvent(
+                                        sessionID: sid, at: Date(),
+                                        kind: "DRIVE_DID_RETRY_BACKOFF",
+                                        note: "12 consecutive failures; retries remain per DID"
+                                    )
+                                    consecutiveTransportErrors = 0
+                                }
                             }
+                            budget -= selected.count
                         }
                     } else {
                         driveCurrent = "停車／車速不明：未知DIDは送信せず待機"
@@ -903,6 +923,89 @@ final class AnalyzerViewModel: ObservableObject {
         statusMessage = "走行解析収集を終了中。現在の要求完了を待っています"
     }
 
+    /// Reserve at most 'maximum' distinct due DIDs. Batching is ECU01-only
+    /// because ATM5B01 routes to physical ECU01; an ECU02 read must never be
+    /// relabelled as ECU01. Legacy adapters reserve one candidate at a time.
+    private func reserveVerifiedDriveBatch(
+        scheduler: AdaptiveDriveDIDScheduler, maximum: Int
+    ) -> [DriveDID] {
+        guard maximum > 0,
+              let first = scheduler.next(now: Date(), context: drivingContext)
+        else { return [] }
+        var reserved = [first]
+        guard first.ecu == "01",
+              !udsBatchUnavailableForConnection,
+              let caps = session.negotiatedM5CAN, caps.supportsUDS22
+        else { return reserved }
+        let count = min(maximum, caps.maxBatchIDs)
+        if count > 1 {
+            for _ in 1..<count {
+                guard let candidate = scheduler.next(
+                    now: Date(), context: drivingContext,
+                    excluding: Set(reserved.map(\.id)), ecuOnly: "01"
+                ) else { break }
+                reserved.append(candidate)
+            }
+        }
+        return reserved
+    }
+
+    /// Only ECU01 DIDs previously verified by the candidate loader are
+    /// eligible. A framing/transport fault downgrades UDS batching for this
+    /// connection, preserving RAW evidence and retrying individual reads.
+    private func sampleKnownDrivingDIDs(_ candidates: [DriveDID]) async -> [DidProbeOutcome] {
+        if !candidates.isEmpty,
+           !udsBatchUnavailableForConnection,
+           let caps = session.negotiatedM5CAN, caps.supportsUDS22,
+           candidates.count <= caps.maxBatchIDs,
+           candidates.allSatisfy({ $0.ecu == "01" }) {
+            let ids = candidates.map { String(format: "%04X", $0.did) }
+            do {
+                let (result, batch) = try await session.batchRead(
+                    group: .ecu01ReadDID, ids: ids, timeout: 15.0
+                )
+                append(result)
+                // Dedicated firmware may have used its own CAN TX header.
+                // Invalidate the ELM header cache before the next legacy read.
+                activeHeaderCommand = nil
+                activeReadPathLabel = "M5CAN UDS22バッチ（\(candidates.count) DID）"
+                udsBatchStatusLabel = "有効（\(candidates.count) DID一括）"
+                return zip(candidates, batch.items).map { candidate, item in
+                    let command = String(format: "22%04X", candidate.did)
+                    recordCommand(ElmCommandResult(
+                        command: command, raw: Data(item.responseText.utf8),
+                        text: item.responseText, latencyMs: 0,
+                        success: elmResponseSuccess(item.responseText)
+                    ))
+                    let outcome = classifyUDS22Text(
+                        item.responseText, ecu: candidate.ecu, did: candidate.did,
+                        latencyMs: 0
+                    )
+                    promoteCommandIfPositive(command, outcome: outcome)
+                    return outcome
+                }
+            } catch {
+                activeHeaderCommand = nil
+                if Task.isCancelled { return [] }
+                udsBatchUnavailableForConnection = true
+                activeReadPathLabel = "UDSバッチ失敗：個別通信に切替"
+                udsBatchStatusLabel = "失敗で無効化（再初期化で再試行）"
+                if let store = captureStore, let sid = captureSessionID {
+                    store.addEvent(
+                        sessionID: sid, at: Date(), kind: "M5CAN_UDS_BATCH_FALLBACK",
+                        note: "ids=\(ids.joined(separator: ",")) error=\(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+        var outcomes: [DidProbeOutcome] = []
+        for candidate in candidates {
+            if Task.isCancelled { break }
+            outcomes.append(await sampleKnownDrivingDID(candidate))
+        }
+        return outcomes
+    }
+
     private func sampleKnownDrivingDID(_ candidate: DriveDID) async -> DidProbeOutcome {
         // No ATH0 retry, no unknown DID enumeration, no write/reset service.
         guard let header = physicalRequestHeaderCommand(for: candidate.ecu) else {
@@ -913,6 +1016,7 @@ final class AnalyzerViewModel: ObservableObject {
             let command = String(format: "22%04X", candidate.did)
             let result = try await session.command(command, timeout: 5.0)
             append(result)
+            activeReadPathLabel = "ELM個別（ECU \(candidate.ecu)）"
             let outcome = classifyUDS22Text(
                 result.text, ecu: candidate.ecu, did: candidate.did,
                 latencyMs: result.latencyMs
@@ -995,10 +1099,11 @@ final class AnalyzerViewModel: ObservableObject {
 
             if let speed, speed > 0 {
                 stationaryConfirmed = false
-                if let candidate = scheduler.next(
-                    now: Date(), context: drivingContext
-                ) {
-                    let outcome = await sampleKnownDrivingDID(candidate)
+                let selected = reserveVerifiedDriveBatch(
+                    scheduler: scheduler, maximum: 4
+                )
+                let outcomes = await sampleKnownDrivingDIDs(selected)
+                for (candidate, outcome) in zip(selected, outcomes) {
                     _ = recordAdaptiveDriveSample(
                         candidate, outcome: outcome, scheduler: scheduler,
                         store: store, sessionID: sessionID
@@ -1011,12 +1116,9 @@ final class AnalyzerViewModel: ObservableObject {
                 monitoringIndex += 1
                 if monitoringIndex % 2 == 0 {
                     try await prepareMode01()
-                    let rpmResult = try await session.command("010C")
-                    append(rpmResult)
-                    rpm = decodeEngineRPM(rpmResult.text)
-                    let powerResult = try await session.command("019A")
-                    append(powerResult)
-                    if let hv = decodeHybridEv9A(powerResult.text) {
+                    let references = try await readKnownMode01(["010C", "019A"])
+                    rpm = decodeEngineRPM(references.texts[0])
+                    if let hv = decodeHybridEv9A(references.texts[1]) {
                         hvVoltage = hv.voltageV
                         hvCurrent = hv.currentA
                         hvPowerKW = hv.powerKW
@@ -1048,6 +1150,7 @@ final class AnalyzerViewModel: ObservableObject {
         try await selectHeader("ATSHDB33F1")
         let result = try await session.command("010D", timeout: 5.0)
         append(result)
+        activeReadPathLabel = "ELM個別（車速安全確認）"
         guard result.success, let value = decodeVehicleSpeed(result.text) else { return nil }
         speedKmh = value
         if value > 0 {
@@ -1068,6 +1171,7 @@ final class AnalyzerViewModel: ObservableObject {
 
             let first = try await session.command(command, timeout: 5.0)
             append(first)
+            activeReadPathLabel = "ELM個別（未知DID探索）"
             var best = classifyUDS22Text(first.text, ecu: ecu, did: did, latencyMs: first.latencyMs)
             promoteCommandIfPositive(command, outcome: best)
 
@@ -1184,42 +1288,40 @@ final class AnalyzerViewModel: ObservableObject {
         }
     }
 
-    private func pollKnownCycle(requireComplete: Bool = false) async throws {
-        let keys = ["010C", "010D", "0105", "015B", "019A"]
-        let texts: [String]
-        let successes: [Bool]
+    /// Every caller (live, drive, paused scan) shares the same capability
+    /// check and synthetic per-PID evidence for SQLite/replay compatibility.
+    private func readKnownMode01(_ keys: [String]) async throws
+        -> (texts: [String], successes: [Bool]) {
         if session.negotiatedM5CAN?.supportsOBD01 == true {
-            // Five RPM/speed/coolant/SOC/HV requests, one BLE round-trip.
-            // The device still serializes the five ECU queries.
             let (result, batch) = try await session.batchRead(
                 group: .mode01, ids: keys, timeout: 10.0
             )
             append(result)
-            texts = batch.items.map(\.responseText)
-            successes = texts.map(elmResponseSuccess)
-            // SQLite analysis expects the five reference commands individually.
-            // Keep synthetic per-item rows alongside the original batch raw
-            // command; per-item latency is unknown, so record 0 rather than
-            // incorrectly copying the entire batch RTT to each item.
+            let texts = batch.items.map(\.responseText)
+            let successes = texts.map(elmResponseSuccess)
             for (index, key) in keys.enumerated() {
                 recordCommand(ElmCommandResult(
-                    command: key,
-                    raw: Data(texts[index].utf8),
-                    text: texts[index],
-                    latencyMs: 0,
-                    success: successes[index]
+                    command: key, raw: Data(texts[index].utf8),
+                    text: texts[index], latencyMs: 0, success: successes[index]
                 ))
             }
-        } else {
-            var results: [ElmCommandResult] = []
-            for key in keys {
-                let result = try await session.command(key)
-                append(result)
-                results.append(result)
-            }
-            texts = results.map(\.text)
-            successes = results.map(\.success)
+            activeReadPathLabel = "M5CAN OBD01バッチ（\(keys.count) PID）"
+            return (texts, successes)
         }
+
+        var results: [ElmCommandResult] = []
+        for key in keys {
+            let result = try await session.command(key)
+            append(result)
+            results.append(result)
+        }
+        activeReadPathLabel = "ELM個別（Mode01）"
+        return (results.map(\.text), results.map(\.success))
+    }
+
+    private func pollKnownCycle(requireComplete: Bool = false) async throws {
+        let keys = ["010C", "010D", "0105", "015B", "019A"]
+        let (texts, successes) = try await readKnownMode01(keys)
 
         let rpmValue = decodeEngineRPM(texts[0])
         let speedValue = decodeVehicleSpeed(texts[1])
