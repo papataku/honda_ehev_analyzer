@@ -157,8 +157,13 @@ public final class ElmCommandSession {
         guard pending == nil else { throw ElmCommandError.busy }
         // 1 BLE command initiates a set of serialized read-only CAN queries.
         // It does not require or allow parallel ECU transactions.
-        let lease = try await sendCommand("ATM5TX1", timeout: 2.0)
-        guard lease.success else { throw ElmCommandError.m5canLeaseFailed(lease.text) }
+        // Protocol 1.1+ with LEASE=IMPLICIT authorizes only validated reads
+        // internally: no redundant BLE request/response to ATM5TX1.
+        // Older M5CAN protocol versions retain their original lease semantics.
+        if !cap.usesImplicitLease {
+            let lease = try await sendCommand("ATM5TX1", timeout: 2.0)
+            guard lease.success else { throw ElmCommandError.m5canLeaseFailed(lease.text) }
+        }
         let response = try await sendCommand(command, timeout: timeout)
         // A single ECU may return NO DATA within an otherwise well-framed
         // batch. Preserve per-item results rather than discarding all samples.
@@ -169,7 +174,9 @@ public final class ElmCommandSession {
     }
 
     private func shouldRenewM5CANLease(before command: String) -> Bool {
-        guard isM5CAN else { return false }
+        guard isM5CAN, negotiatedM5CAN?.usesImplicitLease != true else {
+            return false
+        }
         let compact = command.uppercased().filter { !$0.isWhitespace }
         guard !compact.hasPrefix("AT"), isReadOnlyVehicleCommand(compact) else {
             return false
