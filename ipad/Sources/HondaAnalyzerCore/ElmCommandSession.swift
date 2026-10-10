@@ -165,7 +165,12 @@ public final class ElmCommandSession {
         let upperResponse = response.text.uppercased()
         let upperCommand = current.command.uppercased().filter { !$0.isWhitespace }
 
-        if upperResponse.contains("M5CAN") {
+        // Device identity must not persist after changing BLE adapters.
+        // A fresh ATZ/ATI identifies the currently connected hardware.
+        if upperCommand == "ATZ" || upperCommand == "ATI" {
+            isM5CAN = upperResponse.contains("M5CAN")
+            lastM5CANLeaseRenewal = nil
+        } else if upperResponse.contains("M5CAN") {
             isM5CAN = true
         }
 
