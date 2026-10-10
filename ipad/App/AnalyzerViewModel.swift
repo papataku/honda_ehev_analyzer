@@ -22,6 +22,7 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var isBusy = false
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
     @Published var activeReadPathLabel = "未取得"
+    @Published var udsBatchStatusLabel = "未使用"
     @Published var elmInitialized = false
     @Published var knownSignalsValidated = false
     @Published var isLivePolling = false
@@ -85,6 +86,7 @@ final class AnalyzerViewModel: ObservableObject {
                 self.knownSignalsValidated = false
                 self.vehicleProtocolLabel = "未確認（ELM327互換）"
                 self.activeReadPathLabel = "未取得"
+                self.udsBatchStatusLabel = "未使用"
                 self.udsBatchUnavailableForConnection = false
                 self.stationaryConfirmed = false
                 self.observedEcus = []
@@ -122,6 +124,7 @@ final class AnalyzerViewModel: ObservableObject {
             session.resetProtocolNegotiation()
             vehicleProtocolLabel = "未確認（ELM327互換）"
             activeReadPathLabel = "未取得"
+            udsBatchStatusLabel = "未使用"
             udsBatchUnavailableForConnection = false
             elmInitialized = false
             knownSignalsValidated = false
@@ -172,12 +175,14 @@ final class AnalyzerViewModel: ObservableObject {
             let results = await session.initialize()
             udsBatchUnavailableForConnection = false
             activeReadPathLabel = "未取得"
+            udsBatchStatusLabel = "未使用"
             activeHeaderCommand = nil
             priority18Configured = false
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             if let caps = session.negotiatedM5CAN {
                 vehicleProtocolLabel = caps.description
+                udsBatchStatusLabel = caps.supportsUDS22 ? "対応・未試行" : "非対応（個別通信）"
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
@@ -186,6 +191,7 @@ final class AnalyzerViewModel: ObservableObject {
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
+                udsBatchStatusLabel = "非対応（個別通信）"
             }
             elmInitialized = failed.isEmpty
             if !elmInitialized { knownSignalsValidated = false }
@@ -963,6 +969,7 @@ final class AnalyzerViewModel: ObservableObject {
                 // Invalidate the ELM header cache before the next legacy read.
                 activeHeaderCommand = nil
                 activeReadPathLabel = "M5CAN UDS22バッチ（\(candidates.count) DID）"
+                udsBatchStatusLabel = "有効（\(candidates.count) DID一括）"
                 return zip(candidates, batch.items).map { candidate, item in
                     let command = String(format: "22%04X", candidate.did)
                     recordCommand(ElmCommandResult(
@@ -982,6 +989,7 @@ final class AnalyzerViewModel: ObservableObject {
                 if Task.isCancelled { return [] }
                 udsBatchUnavailableForConnection = true
                 activeReadPathLabel = "UDSバッチ失敗：個別通信に切替"
+                udsBatchStatusLabel = "失敗で無効化（再初期化で再試行）"
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_UDS_BATCH_FALLBACK",
@@ -1142,6 +1150,7 @@ final class AnalyzerViewModel: ObservableObject {
         try await selectHeader("ATSHDB33F1")
         let result = try await session.command("010D", timeout: 5.0)
         append(result)
+        activeReadPathLabel = "ELM個別（車速安全確認）"
         guard result.success, let value = decodeVehicleSpeed(result.text) else { return nil }
         speedKmh = value
         if value > 0 {
@@ -1162,6 +1171,7 @@ final class AnalyzerViewModel: ObservableObject {
 
             let first = try await session.command(command, timeout: 5.0)
             append(first)
+            activeReadPathLabel = "ELM個別（未知DID探索）"
             var best = classifyUDS22Text(first.text, ecu: ecu, did: did, latencyMs: first.latencyMs)
             promoteCommandIfPositive(command, outcome: best)
 
