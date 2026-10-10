@@ -50,7 +50,9 @@ public struct M5CANCapabilities: Equatable, Sendable {
         else { return nil }
 
         let ops = Set(opsText.split(separator: ",").map(String.init))
-        guard ops.isSubset(of: ["OBD01", "UDS22"]), !ops.isEmpty else { return nil }
+        // Protocol 1.x may add new optional operations. Ignore features we
+        // do not understand; activate only explicitly known capabilities.
+        guard ops.contains("OBD01") || ops.contains("UDS22") else { return nil }
         return M5CANCapabilities(
             major: major, minor: minor, firmwareVersion: firmware,
             maxBatchIDs: batch, supportsOBD01: ops.contains("OBD01"),
