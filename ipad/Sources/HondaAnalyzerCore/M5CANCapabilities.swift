@@ -18,7 +18,13 @@ public struct M5CANCapabilities: Equatable, Sendable {
     public static func parse(_ reply: String) -> M5CANCapabilities? {
         guard let line = reply
             .components(separatedBy: .newlines)
-            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .map({
+                $0.trimmingCharacters(
+                    in: .whitespacesAndNewlines.union(
+                        CharacterSet(charactersIn: ">")
+                    )
+                )
+            })
             .first(where: { $0.hasPrefix("M5CAN-CAPS ") })
         else { return nil }
 
