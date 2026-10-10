@@ -264,9 +264,19 @@ struct OperationModeCards: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 4)
+                        Picker("データ取得の目標速度", selection: $model.livePollingRequestRateHz) {
+                            Text("5 req/s（標準）").tag(5.0)
+                            Text("10 req/s").tag(10.0)
+                            Text("20 req/s（高速機向け）").tag(20.0)
+                        }
+                        .pickerStyle(.menu)
+                        .disabled(model.isLivePolling || model.livePollingUnthrottled)
+                        Text("現在の設定：\(Int(model.livePollingRequestRateHz)) req/s。5種類の値を順に読むため、5 req/sでは各値が約1秒ごとの更新目標です。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if model.isLivePolling {
                             StatusPill(text: "表示中", systemImage: "waveform.path.ecg", style: .good)
-                            Text(String(format: "実効 %.1f req/s", model.liveEffectiveRequestRateHz))
+                            Text(String(format: "目標 %.0f / 実効 %.1f req/s", model.livePollingRequestRateHz, model.liveEffectiveRequestRateHz))
                                 .font(.caption.monospacedDigit())
                             Button("表示を停止", role: .destructive) {
                                 model.stopLivePolling()
