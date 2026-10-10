@@ -76,6 +76,60 @@ final class HondaAnalyzerCoreTests: XCTestCase {
             group: mode, ids: pids))
     }
 
+    func testM5CANUDSBatchResponseDoesNotMixDIDs() {
+        let group = M5CANBatchGroup.ecu01ReadDID
+        let ids = ["2001", "2012"]
+        XCTAssertEqual(group.command(ids: ids, capacity: 16), "ATM5B01:2001,2012")
+        XCTAssertNil(group.command(ids: ids, capacity: 1))
+        XCTAssertNil(group.command(ids: ["2012", "2E12X"], capacity: 16))
+
+        let response = """
+        M5ITEM:01:2001\r
+        18DAF101056220010102\r
+        M5ITEM:01:2012\r
+        18DAF10105622012AABB\r
+        M5DONE\r>
+        """
+        let parsed = M5CANBatchResponse.parse(response, group: group, ids: ids)
+        XCTAssertEqual(parsed?.items.map(\.key), ["01:2001", "01:2012"])
+        XCTAssertTrue(parsed?.items[0].responseText.contains("622001") == true)
+        XCTAssertTrue(parsed?.items[1].responseText.contains("622012") == true)
+        XCTAssertNil(M5CANBatchResponse.parse(
+            response.replacingOccurrences(of: "M5ITEM:01:2012", with: "M5ITEM:01:2001"),
+            group: group, ids: ids
+        ))
+        XCTAssertNil(M5CANBatchResponse.parse(
+            response.replacingOccurrences(of: "M5DONE", with: "NO DATA"),
+            group: group, ids: ids
+        ))
+    }
+
+    func testAdaptiveSchedulerReservesDistinctECU01DIDs() {
+        let candidates = [
+            DriveDID(ecu: "01", did: 0x2001, responseCanID: "18DAF101", payloadLength: 2),
+            DriveDID(ecu: "01", did: 0x2012, responseCanID: "18DAF101", payloadLength: 2),
+            DriveDID(ecu: "02", did: 0x2020, responseCanID: "18DAF102", payloadLength: 2)
+        ]
+        let scheduler = AdaptiveDriveDIDScheduler(candidates: candidates)
+        let now = Date()
+        let first = scheduler.next(now: now, context: .ev, ecuOnly: "01")
+        XCTAssertEqual(first?.ecu, "01")
+        guard let first else { return }
+        let second = scheduler.next(
+            now: now, context: .ev, excluding: [first.id], ecuOnly: "01"
+        )
+        XCTAssertNotNil(second)
+        XCTAssertNotEqual(first.id, second?.id)
+        XCTAssertNil(scheduler.next(
+            now: now, context: .ev,
+            excluding: Set(candidates.filter { $0.ecu == "01" }.map(\.id)),
+            ecuOnly: "01"
+        ))
+        XCTAssertEqual(scheduler.next(
+            now: now, context: .ev, ecuOnly: "02"
+        )?.ecu, "02")
+    }
+
     func testPromptFramerHandlesFragmentsAndMergedResponses() {
         let framer = ElmPromptFramer()
         XCTAssertTrue(framer.feed(Data("41 0C".utf8)).isEmpty)
@@ -215,6 +269,10 @@ final class HondaAnalyzerCoreTests: XCTestCase {
                     onReceive?(Data(
                         "M5ITEM:00:010C\r18DAF10104410C1F40\rM5ITEM:00:010D\r18DAF10103410D28\rM5DONE\r>".utf8
                     ))
+                } else if command == "ATM5B01:2001,2012" {
+                    onReceive?(Data(
+                        "M5ITEM:01:2001\r18DAF101056220010102\rM5ITEM:01:2012\r18DAF10105622012AABB\rM5DONE\r>".utf8
+                    ))
                 } else if command == "010C" {
                     onReceive?(Data("18DAF10104410C1F40\r>".utf8))
                 } else {
@@ -232,10 +290,16 @@ final class HondaAnalyzerCoreTests: XCTestCase {
             group: .mode01, ids: ["010C", "010D"], timeout: 2.0
         )
         XCTAssertEqual(result.items.count, 2)
+        let (_, didBatch) = try await session.batchRead(
+            group: .ecu01ReadDID, ids: ["2001", "2012"], timeout: 2.0
+        )
+        XCTAssertEqual(didBatch.items.count, 2)
+        XCTAssertEqual(didBatch.items[1].key, "01:2012")
         _ = try await session.command("010C", timeout: 2.0)
 
         XCTAssertEqual(fake.writes.filter { $0 == "ATM5TX1" }.count, 0)
         XCTAssertEqual(fake.writes.filter { $0.hasPrefix("ATM5B00:") }.count, 1)
+        XCTAssertEqual(fake.writes.filter { $0.hasPrefix("ATM5B01:") }.count, 1)
         XCTAssertEqual(fake.writes.filter { $0 == "010C" }.count, 1)
     }
 
