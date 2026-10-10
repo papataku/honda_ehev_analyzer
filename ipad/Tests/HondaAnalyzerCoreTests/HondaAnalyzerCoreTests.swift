@@ -123,6 +123,39 @@ final class HondaAnalyzerCoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSwitchFromM5CANToKW905ClearsLeaseCommand() async throws {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            var writes: [String] = []
+            func write(_ data: Data) throws {
+                writes.append(String(decoding: data, as: UTF8.self))
+            }
+            func emit(_ text: String) { onReceive?(Data(text.utf8)) }
+        }
+        let transport = FakeTransport()
+        let session = ElmCommandSession(transport: transport)
+
+        let m5 = Task { try await session.command("ATI", timeout: 1.0) }
+        await Task.yield()
+        transport.emit("M5CAN v0.3 ELM-CAN compatible\r>")
+        _ = try await m5.value
+
+        // The next adapter's reset identifies itself as a normal ELM327.
+        let kw = Task { try await session.command("ATZ", timeout: 1.0) }
+        await Task.yield()
+        transport.emit("ELM327 v1.5\r>")
+        _ = try await kw.value
+
+        let countBefore = transport.writes.count
+        let rpm = Task { try await session.command("010C", timeout: 1.0) }
+        await Task.yield()
+        XCTAssertEqual(transport.writes.count, countBefore + 1)
+        XCTAssertEqual(transport.writes.last, "010C\r")
+        transport.emit("18DAF10104410C1F40\r>")
+        _ = try await rpm.value
+    }
+
+    @MainActor
     func testElmCommandSessionBlocksUnsafeVehicleWrite() async {
         final class FakeTransport: ElmByteTransport {
             var onReceive: ((Data) -> Void)?
