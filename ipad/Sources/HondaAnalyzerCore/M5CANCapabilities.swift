@@ -10,9 +10,12 @@ public struct M5CANCapabilities: Equatable, Sendable {
     public let supportsOBD01: Bool
     public let supportsUDS22: Bool
     public let supportsStreaming: Bool
+    /// M5CAN itself grants a short-lived TX permit for each validated request.
+    /// Older firmware without LEASE=IMPLICIT still needs ATM5TX1.
+    public let usesImplicitLease: Bool
 
     public var description: String {
-        "M5CAN protocol \(major).\(minor), firmware \(firmwareVersion), batch ≤\(maxBatchIDs)"
+        "M5CAN protocol \(major).\(minor), firmware \(firmwareVersion), batch ≤\(maxBatchIDs), lease \(usesImplicitLease ? "内部管理" : "従来型")"
     }
 
     public static func parse(_ reply: String) -> M5CANCapabilities? {
@@ -49,6 +52,12 @@ public struct M5CANCapabilities: Equatable, Sendable {
               let stream = fields["STREAM"], stream == "0" || stream == "1"
         else { return nil }
 
+        // Absence of LEASE retains compatibility with V1.0 firmware,
+        // which still expects explicit ATM5TX1 messages.
+        let leaseMode = fields["LEASE"] ?? "EXPLICIT"
+        guard leaseMode == "EXPLICIT" || leaseMode == "IMPLICIT" else {
+            return nil
+        }
         let ops = Set(opsText.split(separator: ",").map(String.init))
         // Protocol 1.x may add new optional operations. Ignore features we
         // do not understand; activate only explicitly known capabilities.
@@ -57,7 +66,8 @@ public struct M5CANCapabilities: Equatable, Sendable {
             major: major, minor: minor, firmwareVersion: firmware,
             maxBatchIDs: batch, supportsOBD01: ops.contains("OBD01"),
             supportsUDS22: ops.contains("UDS22"),
-            supportsStreaming: stream == "1"
+            supportsStreaming: stream == "1",
+            usesImplicitLease: leaseMode == "IMPLICIT"
         )
     }
 }
