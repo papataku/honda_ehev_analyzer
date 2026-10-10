@@ -27,6 +27,7 @@ public enum ElmCommandError: LocalizedError {
     case timeout
     case unsafeCommand(String)
     case m5canLeaseFailed(String)
+    case dedicatedModeUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +39,8 @@ public enum ElmCommandError: LocalizedError {
             return "Blocked non-read-only vehicle command: \(command)"
         case .m5canLeaseFailed(let response):
             return "M5CAN TX lease could not be acquired: \(response)"
+        case .dedicatedModeUnavailable:
+            return "M5CAN専用通信に未対応のファームウェアです"
         }
     }
 }
@@ -72,6 +75,7 @@ public final class ElmCommandSession {
     private var pending: Pending?
 
     private var isM5CAN = false
+    public private(set) var negotiatedM5CAN: M5CANCapabilities?
     private var lastM5CANLeaseRenewal: Date?
     private let m5canLeaseRefreshSeconds: TimeInterval = 2.0
 
@@ -98,6 +102,10 @@ public final class ElmCommandSession {
     }
 
     public func initialize() async -> [ElmCommandResult] {
+        // Do not carry identity/capabilities across BLE connections.
+        negotiatedM5CAN = nil
+        isM5CAN = false
+        lastM5CANLeaseRenewal = nil
         var results: [ElmCommandResult] = []
         for command in elmInitCommands + elmMetaCommands {
             do {
@@ -112,7 +120,35 @@ public final class ElmCommandSession {
                 ))
             }
         }
+        // Capability discovery is optional and only sent to verified M5CAN.
+        // Legacy M5CAN, an incompatible future protocol, and all KW905
+        // devices continue using the normal ELM request/response path.
+        if isM5CAN && results.last(where: { $0.command == "ATI" })?.success == true {
+            if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0),
+               reply.success {
+                negotiatedM5CAN = M5CANCapabilities.parse(reply.text)
+            }
+        }
         return results
+    }
+
+    public func batchRead(
+        group: M5CANBatchGroup, ids: [String], timeout: TimeInterval = 8.0
+    ) async throws -> (ElmCommandResult, M5CANBatchResponse) {
+        guard let cap = negotiatedM5CAN,
+              (group == .mode01 ? cap.supportsOBD01 : cap.supportsUDS22),
+              let command = group.command(ids: ids, capacity: cap.maxBatchIDs)
+        else { throw ElmCommandError.dedicatedModeUnavailable }
+        guard pending == nil else { throw ElmCommandError.busy }
+        // 1 BLE command initiates a set of serialized read-only CAN queries.
+        // It does not require or allow parallel ECU transactions.
+        let lease = try await sendCommand("ATM5TX1", timeout: 2.0)
+        guard lease.success else { throw ElmCommandError.m5canLeaseFailed(lease.text) }
+        let response = try await sendCommand(command, timeout: timeout)
+        guard response.success,
+              let parsed = M5CANBatchResponse.parse(response.text, group: group, ids: ids)
+        else { throw ElmCommandError.dedicatedModeUnavailable }
+        return (response, parsed)
     }
 
     private func shouldRenewM5CANLease(before command: String) -> Bool {
@@ -169,6 +205,7 @@ public final class ElmCommandSession {
         // A fresh ATZ/ATI identifies the currently connected hardware.
         if upperCommand == "ATZ" || upperCommand == "ATI" {
             isM5CAN = upperResponse.contains("M5CAN")
+            negotiatedM5CAN = nil
             lastM5CANLeaseRenewal = nil
         } else if upperResponse.contains("M5CAN") {
             isM5CAN = true
