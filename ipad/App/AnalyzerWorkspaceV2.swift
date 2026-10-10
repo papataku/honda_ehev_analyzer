@@ -755,6 +755,10 @@ private struct SettingsPage: View {
                         "直近の取得経路",
                         value: model.activeReadPathLabel
                     )
+                    LabeledContent(
+                        "UDSバッチ状態",
+                        value: model.udsBatchStatusLabel
+                    )
                     Text("ライブ監視のMode01と走行中の確認済みECU01 DIDは、対応M5CANで個別CAN要求をBLEバッチ化します。未知DID探索・他ECUは安全のため個別要求です。バッチ失敗時は個別通信へ切り替え、SQLiteに理由を保存します。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
