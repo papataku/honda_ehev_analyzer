@@ -28,6 +28,7 @@ public enum ElmCommandError: LocalizedError {
     case unsafeCommand(String)
     case m5canLeaseFailed(String)
     case dedicatedModeUnavailable
+    case adapterChanged
 
     public var errorDescription: String? {
         switch self {
@@ -41,6 +42,8 @@ public enum ElmCommandError: LocalizedError {
             return "M5CAN TX lease could not be acquired: \(response)"
         case .dedicatedModeUnavailable:
             return "M5CAN専用通信に未対応のファームウェアです"
+        case .adapterChanged:
+            return "BLE接続先が変更されました"
         }
     }
 }
@@ -84,6 +87,20 @@ public final class ElmCommandSession {
         transport.onReceive = { [weak self] data in self?.receive(data) }
     }
 
+    /// Invalidate the negotiated protocol and any unfinished reply whenever
+    /// the BLE peripheral changes or disconnects. Never reuse M5CAN
+    /// capabilities from an earlier adapter, even if it has the same name.
+    public func resetProtocolNegotiation() {
+        isM5CAN = false
+        negotiatedM5CAN = nil
+        lastM5CANLeaseRenewal = nil
+        framer.reset()
+        if let current = pending {
+            pending = nil
+            current.continuation.resume(throwing: ElmCommandError.adapterChanged)
+        }
+    }
+
     public func command(_ command: String, timeout: TimeInterval = 5.0) async throws -> ElmCommandResult {
         guard pending == nil else { throw ElmCommandError.busy }
         guard isReadOnlyVehicleCommand(command) else { throw ElmCommandError.unsafeCommand(command) }
@@ -103,9 +120,7 @@ public final class ElmCommandSession {
 
     public func initialize() async -> [ElmCommandResult] {
         // Do not carry identity/capabilities across BLE connections.
-        negotiatedM5CAN = nil
-        isM5CAN = false
-        lastM5CANLeaseRenewal = nil
+        resetProtocolNegotiation()
         var results: [ElmCommandResult] = []
         for command in elmInitCommands + elmMetaCommands {
             do {
