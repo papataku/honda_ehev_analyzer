@@ -96,7 +96,8 @@ final class AnalyzerViewModel: ObservableObject {
             let folder = documents.appendingPathComponent("HondaAnalyzerSessions", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-            let url = folder.appendingPathComponent("session-\(stamp).sqlite3")
+            let prefix = ble.simulationEnabled ? "SIMULATED-session-" : "session-"
+            let url = folder.appendingPathComponent("\(prefix)\(stamp).sqlite3")
             let store = try CaptureStore(url: url)
             store.onError = { [weak self] error in
                 self?.statusMessage = "記録エラー: \(error.localizedDescription)"
@@ -1124,7 +1125,7 @@ final class AnalyzerViewModel: ObservableObject {
                 "properties": $0.properties
             ] as [String: Any]
         }
-        var metadata: [String: Any] = ["gatt": inventory]
+        var metadata: [String: Any] = ["gatt": inventory, "simulated": ble.simulationEnabled]
         if let name = ble.connectedDeviceName { metadata["name"] = name }
         if let write = ble.selectedWriteUUID { metadata["selected_write_uuid"] = write }
         if let notify = ble.selectedNotifyUUID { metadata["selected_notify_uuid"] = notify }
