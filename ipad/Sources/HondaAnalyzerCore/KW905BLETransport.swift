@@ -33,6 +33,10 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     @Published public private(set) var selectedNotifyUUID: String?
     public var onReceive: ((Data) -> Void)?
 
+    /// Enabled only by --ble-sim on the iPadOS Simulator. Never on physical devices.
+    public let simulationEnabled: Bool
+    private let virtualPeripheral = SimulatedELMPeripheral()
+    private var virtualGeneration = 0
     private var central: CBCentralManager!
     private var discovered: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
@@ -40,27 +44,91 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     private var notifyCharacteristic: CBCharacteristic?
 
     public override init() {
+#if targetEnvironment(simulator)
+        simulationEnabled = ProcessInfo.processInfo.arguments.contains("--ble-sim")
+#else
+        simulationEnabled = false
+#endif
         super.init()
-        central = CBCentralManager(delegate: self, queue: nil)
+        if !simulationEnabled {
+            central = CBCentralManager(delegate: self, queue: nil)
+        }
     }
 
     public func startScan() {
+        if simulationEnabled {
+            devices = [BLEDevice(id: SimulatedELMPeripheral.identifier,
+                                 name: SimulatedELMPeripheral.advertisedName, rssi: -42)]
+            state = "scanning"
+            return
+        }
         guard central.state == .poweredOn else { state = "bluetooth-unavailable"; return }
         devices = []; discovered = [:]; state = "scanning"
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
     public func stopScan() {
+        if simulationEnabled {
+            if state == "scanning" { state = "idle" }
+            return
+        }
         central.stopScan()
         if state == "scanning" { state = "idle" }
     }
     public func connect(to id: UUID) throws {
+        if simulationEnabled {
+            guard id == SimulatedELMPeripheral.identifier,
+                  devices.contains(where: { $0.id == id }) else {
+                throw BLETransportError.unknownDevice
+            }
+            stopScan()
+            state = "connecting"
+            virtualGeneration += 1
+            let generation = virtualGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(75)) { [weak self] in
+                guard let self, self.virtualGeneration == generation else { return }
+                self.gattInventory = [
+                    GattCharacteristicInfo(serviceUUID: "FFF0", uuid: "FFF1", properties: ["notify"]),
+                    GattCharacteristicInfo(serviceUUID: "FFF0", uuid: "FFF2", properties: ["write"])
+                ]
+                self.connectedDeviceID = id
+                self.connectedDeviceName = SimulatedELMPeripheral.advertisedName
+                self.selectedWriteUUID = "FFF2"
+                self.selectedNotifyUUID = "FFF1"
+                self.state = "ready"
+            }
+            return
+        }
         guard let target = discovered[id] else { throw BLETransportError.unknownDevice }
         stopScan(); state = "connecting"; peripheral = target; target.delegate = self; central.connect(target)
     }
     public func disconnect() {
+        if simulationEnabled {
+            virtualGeneration += 1  // Drop delayed notifications from prior connection.
+            connectedDeviceID = nil
+            connectedDeviceName = nil
+            selectedWriteUUID = nil
+            selectedNotifyUUID = nil
+            gattInventory = []
+            state = "disconnected"
+            return
+        }
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
     }
     public func write(_ data: Data) throws {
+        if simulationEnabled {
+            guard state == "ready" else { throw BLETransportError.notReady }
+            let chunks = virtualPeripheral.notificationChunks(for: data)
+            let generation = virtualGeneration
+            for (index, chunk) in chunks.enumerated() {
+                let ms = (index + 1) * virtualPeripheral.notificationIntervalMs
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
+                    guard let self, self.virtualGeneration == generation,
+                          self.state == "ready" else { return }
+                    self.onReceive?(chunk)
+                }
+            }
+            return
+        }
         guard let peripheral, let characteristic = writeCharacteristic else { throw BLETransportError.notReady }
         let type: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
         peripheral.writeValue(data, for: characteristic, type: type)
