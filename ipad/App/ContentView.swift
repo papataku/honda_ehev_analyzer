@@ -61,6 +61,12 @@ private struct BLEConnectionView: View {
         NavigationSplitView {
             List {
                 Section("Bluetooth接続") {
+                    if model.ble.simulationEnabled {
+                        Label("仮想BLEモード・実車には接続していません", systemImage: "testtube.2")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("ble-simulation-warning")
+                    }
                     LabeledContent("状態", value: stateLabel)
 
                     if model.ble.state == "ready" {
