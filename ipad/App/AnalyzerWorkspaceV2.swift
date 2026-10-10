@@ -747,6 +747,13 @@ private struct SettingsPage: View {
                         "接続先",
                         value: model.ble.connectedDeviceName ?? "未接続"
                     )
+                    LabeledContent(
+                        "通信方式・版数",
+                        value: model.vehicleProtocolLabel
+                    )
+                    Text("接続先のATIと専用機能確認を照合します。対応M5CANだけ一括取得を使用し、KW905・旧ファーム・未対応の将来版は標準ELM327通信です。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button("Bluetooth接続画面を開く") {
                         onOpenConnection()
                     }
