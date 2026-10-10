@@ -19,6 +19,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var bleStateObservation: AnyCancellable?
 
     @Published var isBusy = false
+    @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
     @Published var elmInitialized = false
     @Published var knownSignalsValidated = false
     @Published var isLivePolling = false
@@ -79,6 +80,7 @@ final class AnalyzerViewModel: ObservableObject {
                 state == "bluetooth-unavailable" {
                 self.elmInitialized = false
                 self.knownSignalsValidated = false
+                self.vehicleProtocolLabel = "未確認（ELM327互換）"
                 self.stationaryConfirmed = false
                 self.observedEcus = []
                 self.activeHeaderCommand = nil
@@ -163,6 +165,17 @@ final class AnalyzerViewModel: ObservableObject {
             priority18Configured = false
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
+            if let caps = session.negotiatedM5CAN {
+                vehicleProtocolLabel = caps.description
+                if let store = captureStore, let sid = captureSessionID {
+                    store.addEvent(
+                        sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
+                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming)"
+                    )
+                }
+            } else {
+                vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
+            }
             elmInitialized = failed.isEmpty
             if !elmInitialized { knownSignalsValidated = false }
             statusMessage = failed.isEmpty ? "ELM初期化完了" : "ELM初期化完了（失敗 \(failed.count)件）"
@@ -1177,6 +1190,19 @@ final class AnalyzerViewModel: ObservableObject {
             append(result)
             texts = batch.items.map(\.responseText)
             successes = texts.map(elmResponseSuccess)
+            // SQLite analysis expects the five reference commands individually.
+            // Keep synthetic per-item rows alongside the original batch raw
+            // command; per-item latency is unknown, so record 0 rather than
+            // incorrectly copying the entire batch RTT to each item.
+            for (index, key) in keys.enumerated() {
+                recordCommand(ElmCommandResult(
+                    command: key,
+                    raw: Data(texts[index].utf8),
+                    text: texts[index],
+                    latencyMs: 0,
+                    success: successes[index]
+                ))
+            }
         } else {
             var results: [ElmCommandResult] = []
             for key in keys {
