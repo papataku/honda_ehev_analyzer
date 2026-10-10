@@ -12,6 +12,14 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(supported?.supportsOBD01, true)
         XCTAssertEqual(supported?.supportsUDS22, true)
         XCTAssertEqual(supported?.supportsStreaming, false)
+        XCTAssertEqual(supported?.usesImplicitLease, false) // v1.0 fallback
+        let implicit = M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=1.1 FW=0.4.1-phase3d-implicit BATCH=16 OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT>"
+        )
+        XCTAssertEqual(implicit?.usesImplicitLease, true)
+        XCTAssertNil(M5CANCapabilities.parse(
+            "M5CAN-CAPS PROTO=1.1 FW=0.4.1 BATCH=16 OPS=OBD01 STREAM=0 LEASE=UNKNOWN>"
+        ))
         XCTAssertNotNil(M5CANCapabilities.parse(
             "M5CAN-CAPS PROTO=1.1 FW=0.4.0 BATCH=8 OPS=OBD01 STREAM=0>"
         ))
@@ -186,6 +194,49 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         XCTAssertEqual(transport.writes.filter { $0 == "ATM5TX1\r" }.count, 1)
         transport.emit("18DAF10103410D2A\r>")
         _ = try await speed.value
+    }
+
+    @MainActor
+    func testImplicitLeaseAvoidsRedundantBLEMessages() async throws {
+        final class FakeTransport: ElmByteTransport {
+            var onReceive: ((Data) -> Void)?
+            var writes: [String] = []
+            func write(_ data: Data) throws {
+                let command = String(decoding: data, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                writes.append(command)
+                if command == "ATZ" || command == "ATI" {
+                    onReceive?(Data("M5CAN v0.4 ELM-CAN compatible\r>".utf8))
+                } else if command == "ATM5CAP" {
+                    onReceive?(Data(
+                        "M5CAN-CAPS PROTO=1.1 FW=0.4.1-phase3d-implicit BATCH=16 OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT\r>".utf8
+                    ))
+                } else if command == "ATM5B00:010C,010D" {
+                    onReceive?(Data(
+                        "M5ITEM:00:010C\r18DAF10104410C1F40\rM5ITEM:00:010D\r18DAF10103410D28\rM5DONE\r>".utf8
+                    ))
+                } else if command == "010C" {
+                    onReceive?(Data("18DAF10104410C1F40\r>".utf8))
+                } else {
+                    onReceive?(Data("OK\r>".utf8))
+                }
+            }
+        }
+        let fake = FakeTransport()
+        let session = ElmCommandSession(transport: fake)
+        let initResults = await session.initialize()
+        XCTAssertTrue(initResults.allSatisfy(\.success))
+        XCTAssertEqual(session.negotiatedM5CAN?.usesImplicitLease, true)
+
+        let (_, result) = try await session.batchRead(
+            group: .mode01, ids: ["010C", "010D"], timeout: 2.0
+        )
+        XCTAssertEqual(result.items.count, 2)
+        _ = try await session.command("010C", timeout: 2.0)
+
+        XCTAssertEqual(fake.writes.filter { $0 == "ATM5TX1" }.count, 0)
+        XCTAssertEqual(fake.writes.filter { $0.hasPrefix("ATM5B00:") }.count, 1)
+        XCTAssertEqual(fake.writes.filter { $0 == "010C" }.count, 1)
     }
 
     @MainActor
