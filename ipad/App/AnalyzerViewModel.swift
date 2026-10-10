@@ -78,6 +78,7 @@ final class AnalyzerViewModel: ObservableObject {
             if state == "connecting" || state == "disconnected" ||
                 state == "connect-failed" || state == "gatt-error" ||
                 state == "bluetooth-unavailable" {
+                self.session.resetProtocolNegotiation()
                 self.elmInitialized = false
                 self.knownSignalsValidated = false
                 self.vehicleProtocolLabel = "未確認（ELM327互換）"
@@ -114,6 +115,8 @@ final class AnalyzerViewModel: ObservableObject {
             // Evidence-first workflow: communication readiness must be proven
             // again inside every new capture session so initialization and
             // known-signal evidence are present in that SQLite file.
+            session.resetProtocolNegotiation()
+            vehicleProtocolLabel = "未確認（ELM327互換）"
             elmInitialized = false
             knownSignalsValidated = false
             stationaryConfirmed = false
@@ -202,7 +205,11 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startLivePolling() {
-        guard !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else { return }
+        guard ble.state == "ready", elmInitialized, knownSignalsValidated,
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else {
+            statusMessage = "BLE接続・ELM初期化・既知信号確認を完了してください"
+            return
+        }
         isLivePolling = true
         liveEffectiveRequestRateHz = 0
 
