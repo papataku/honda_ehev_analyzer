@@ -154,7 +154,14 @@ public final class AdaptiveDriveDIDScheduler {
         entries[id]?.priority
     }
 
-    public func next(now: Date, context: DriveOperatingContext) -> DriveDID? {
+    /// Exclusions let a caller reserve several distinct, already verified DIDs
+    /// for one serial-on-CAN / batched-over-BLE request without observing them
+    /// before their real ECU responses arrive.
+    public func next(
+        now: Date, context: DriveOperatingContext,
+        excluding excludedIDs: Set<String> = [],
+        ecuOnly: String? = nil
+    ) -> DriveDID? {
         if context != currentContext {
             currentContext = context
             if context != .unknown {
@@ -168,7 +175,11 @@ public final class AdaptiveDriveDIDScheduler {
                 }
             }
         }
-        let due = entries.values.filter { $0.nextDue <= now }
+        let due = entries.values.filter {
+            $0.nextDue <= now &&
+                !excludedIDs.contains($0.candidate.id) &&
+                (ecuOnly == nil || $0.candidate.ecu == ecuOnly)
+        }
         guard !due.isEmpty else { return nil }
 
         selections += 1
