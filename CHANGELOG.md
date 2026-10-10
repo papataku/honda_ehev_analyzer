@@ -2,6 +2,14 @@
 
 This changelog records release-level changes. Earlier detailed phase notes remain in `README.md` and `docs/`.
 
+## Unreleased — iPad M5CAN driving batch transport (2026-10-11)
+- Use negotiated M5CAN Mode01 batch reads in all live reference-refresh paths.
+- Enable ECU01-only batch reads for up to four previously verified positive DIDs during driving collection and speed-paused discovery.
+- Retain individual speed safety checks, stationary-only unknown DID discovery, and legacy/KW905 compatibility.
+- Persist raw and per-item evidence; log protocol failures and downgrade only UDS batching per connection.
+- Expose the last actual read route on the iPad Settings page; add tagged reply and scheduler regressions.
+- Physical M5Dial acceptance remains pending.
+
 ## 0.3.4 — Long DID Recovery
 - Treat `62 DID ... BUFFER FULL` as a partial Positive instead of a missing DID or ordinary transport error.
 - Preserve received prefixes and retry long responses in compact ELM output mode.
