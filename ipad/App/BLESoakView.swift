@@ -51,7 +51,7 @@ import HondaAnalyzerCore
             try? file?.close()
         }
         do {
-            guard ["idle", "single", "batch", "no-data"].contains(scenario) else { throw SoakError.invalidScenario }
+            guard ["idle", "single", "batch", "no-data", "faults"].contains(scenario) else { throw SoakError.invalidScenario }
             let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let folder = documents.appendingPathComponent("BLESoak", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -107,6 +107,9 @@ import HondaAnalyzerCore
             guard initialized.allSatisfy({ $0.success }) else { throw SoakError.initialization }
             let cap = try await session.command("ATM5CAP")
             guard BLESoakPolicy.demoVerified(cap.text) else { throw SoakError.demoRequired }
+            if scenario == "faults" {
+                guard cap.text.contains("FAULTS=1") else { throw SoakError.demoRequired }
+            }
             event("DEMO_VERIFIED", cap.text)
             _ = try await session.command("ATCP18")
             _ = try await session.command("ATSHDB33F1")
@@ -115,6 +118,27 @@ import HondaAnalyzerCore
                 try Task.checkCancellation()
                 guard ble.state == "ready" else { throw SoakError.connection }
                 if let ioError { throw SoakError.storage(ioError) }
+                if scenario == "faults" {
+                    let cases: [(String, UInt16, DidProbeStatus, UInt8?)] = [
+                        ("22FFFF", 0xFFFF, .noData, nil),
+                        ("22FFFD", 0xFFFD, .nrc, 0x31),
+                        ("22FFFC", 0xFFFC, .nrc, 0x33),
+                        ("222012", 0x2012, .positivePartial, nil)
+                    ]
+                    for (command, did, expected, nrc) in cases {
+                        let response = try await session.command(command)
+                        let classified = classifyUDS22Text(response.text, ecu: "01", did: did)
+                        guard classified.status == expected, classified.nrc == nrc else { throw SoakError.response }
+                        event("EXPECTED_ERROR", "command=\(command) status=\(expected) nrc=\(String(describing: nrc)) BLE=\(ble.state)")
+                    }
+                    do {
+                        _ = try await session.command("22FFFE", timeout: 0.3)
+                        throw SoakError.response
+                    } catch ElmCommandError.timeout {
+                        guard ble.state == "ready", session.negotiatedM5CAN != nil else { throw SoakError.connection }
+                        event("EXPECTED_ERROR", "NO_PROMPT_TIMEOUT BLE=ready negotiated=1")
+                    }
+                }
                 if scenario == "no-data" {
                     // Finite error fixture, not an unknown-DID scanner. The
                     // verified adapter DEMO path returns NO DATA for UDS.
@@ -128,7 +152,7 @@ import HondaAnalyzerCore
                     // Check the link and a fresh normal response immediately
                     // after a failed item/batch, with no reconnect/re-init.
                 }
-                if scenario == "batch" || scenario == "no-data" {
+                if scenario == "batch" || scenario == "no-data" || scenario == "faults" {
                     let (result, parsed) = try await session.batchRead(group: .mode01, ids: BLESoakPolicy.pids)
                     guard result.success, parsed.items.count == 5 else { throw SoakError.response }
                     completed += 1
