@@ -42,6 +42,8 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     private var writeCharacteristic: CBCharacteristic?
     private var notifyCharacteristic: CBCharacteristic?
     private var userRequestedDisconnect = false
+    private var lastSelectedPeripheralID: UUID?
+    public var canReconnectLastDevice: Bool { lastSelectedPeripheralID != nil }
 
     public override init() {
         super.init()
@@ -59,14 +61,40 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     }
     public func connect(to id: UUID) throws {
         guard let target = discovered[id] else { throw BLETransportError.unknownDevice }
+        lastSelectedPeripheralID = id
+        connectPeripheral(target)
+    }
+
+    /// Only reconnect the exact previously selected CBPeripheral. Never select
+    /// another adapter by name or reuse its negotiated ELM capabilities.
+    public func reconnectLastDevice() throws {
+        guard central.state == .poweredOn else { throw BLETransportError.notReady }
+        guard let id = lastSelectedPeripheralID else { throw BLETransportError.unknownDevice }
+        let target = central.retrievePeripherals(withIdentifiers: [id]).first
+            ?? discovered[id]
+            ?? (peripheral?.identifier == id ? peripheral : nil)
+        guard let target else { throw BLETransportError.unknownDevice }
+        if target.state == .connected {
+            // A GATT discovery failure may leave a connected but unusable link.
+            // Cancel it; the next bounded retry re-establishes GATT from scratch.
+            central.cancelPeripheralConnection(target)
+            throw BLETransportError.notReady
+        }
+        connectPeripheral(target)
+    }
+
+    private func connectPeripheral(_ target: CBPeripheral) {
         stopScan()
         lastDisconnectReason = nil
         userRequestedDisconnect = false
+        writeCharacteristic = nil
+        notifyCharacteristic = nil
         state = "connecting"
         peripheral = target
         target.delegate = self
         central.connect(target)
     }
+
     public func disconnect() {
         if let peripheral {
             userRequestedDisconnect = true
@@ -74,7 +102,7 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
         }
     }
     public func write(_ data: Data) throws {
-        guard let peripheral, let characteristic = writeCharacteristic else { throw BLETransportError.notReady }
+        guard state == "ready", let peripheral, let characteristic = writeCharacteristic else { throw BLETransportError.notReady }
         let type: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
         peripheral.writeValue(data, for: characteristic, type: type)
     }
@@ -129,8 +157,8 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
         selectedNotifyUUID = notify.uuid.uuidString
         connectedDeviceID = peripheral.identifier
         connectedDeviceName = peripheral.name
+        state = "enabling-notify"
         peripheral.setNotifyValue(true, for: notify)
-        state = "ready"
     }
     private func propertyNames(_ p: CBCharacteristicProperties) -> [String] {
         var r: [String] = []
@@ -161,6 +189,7 @@ extension KW905BLETransport: CBCentralManagerDelegate {
         else { devices.append(item); devices.sort { ($0.name ?? "") < ($1.name ?? "") } }
     }
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard self.peripheral === peripheral else { return }
         state = "discovering-gatt"; writeCharacteristic = nil; notifyCharacteristic = nil; gattInventory = []
         peripheral.discoverServices(nil)
     }
@@ -197,15 +226,27 @@ extension KW905BLETransport: CBCentralManagerDelegate {
 
 extension KW905BLETransport: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard self.peripheral === peripheral else { return }
         guard error == nil else { state = "gatt-error"; return }
         for service in peripheral.services ?? [] { peripheral.discoverCharacteristics(nil, for: service) }
     }
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard self.peripheral === peripheral else { return }
         guard error == nil else { state = "gatt-error"; return }
         refreshGattAndChoosePair()
     }
+    public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard self.peripheral === peripheral, characteristic === notifyCharacteristic else { return }
+        guard error == nil, characteristic.isNotifying else {
+            lastDisconnectReason = "notify-enable-failed: \(error?.localizedDescription ?? "not notifying")"
+            state = "gatt-error"
+            return
+        }
+        state = "ready"
+    }
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, characteristic == notifyCharacteristic, let value = characteristic.value else { return }
+        guard self.peripheral === peripheral,
+              error == nil, characteristic == notifyCharacteristic, let value = characteristic.value else { return }
         onReceive?(value)
     }
 }
