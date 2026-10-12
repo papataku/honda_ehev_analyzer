@@ -51,7 +51,7 @@ import HondaAnalyzerCore
             try? file?.close()
         }
         do {
-            guard ["idle", "single", "batch"].contains(scenario) else { throw SoakError.invalidScenario }
+            guard ["idle", "single", "batch", "no-data"].contains(scenario) else { throw SoakError.invalidScenario }
             let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let folder = documents.appendingPathComponent("BLESoak", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -115,7 +115,20 @@ import HondaAnalyzerCore
                 try Task.checkCancellation()
                 guard ble.state == "ready" else { throw SoakError.connection }
                 if let ioError { throw SoakError.storage(ioError) }
-                if scenario == "batch" {
+                if scenario == "no-data" {
+                    // Finite error fixture, not an unknown-DID scanner. The
+                    // verified adapter DEMO path returns NO DATA for UDS.
+                    let ids = ["20FF", "FE08", "FFFF"]
+                    let (_, negative) = try await session.batchRead(group: .ecu01ReadDID, ids: ids)
+                    let classifications = zip(negative.items, [UInt16(0x20FF), 0xFE08, 0xFFFF]).map {
+                        classifyUDS22Text($0.0.responseText, ecu: "01", did: $0.1).status
+                    }
+                    guard classifications.allSatisfy({ $0 == .noData }), ble.state == "ready" else { throw SoakError.response }
+                    event("EXPECTED_ERROR", "NO_DATA items=3 BLE=ready")
+                    // Check the link and a fresh normal response immediately
+                    // after a failed item/batch, with no reconnect/re-init.
+                }
+                if scenario == "batch" || scenario == "no-data" {
                     let (result, parsed) = try await session.batchRead(group: .mode01, ids: BLESoakPolicy.pids)
                     guard result.success, parsed.items.count == 5 else { throw SoakError.response }
                     completed += 1

@@ -35,3 +35,16 @@ The currently installed first trial reports286501f-diag-dirty: raw bin/source
 artifacts are saved locally. The additional admission-policy unit tests in this
 branch came after that first build. Do not label the installed dirty test as an
 exact clean committed head. Publish clean builds/CI for reproduction separately.
+
+
+## Finite NO DATA error fixture
+
+Scenario no-data interleaves a fixed three-DID read-only UDS batch with a
+fresh five-PID positive batch, only after DEMO verification. The adapter's
+existing DEMO path returns NO DATA for those UDS items. This checks that an
+expected per-item error preserves GATT/session capability and subsequent
+normal data; it does not initiate unknown exploration on a vehicle.
+Mock session tests separately cover actual captured NRC0x31/0x33, partial
+positive/BUFFER FULL, missing prompt timeout and late old reply before the next
+request. Physical NRC/silent-timeout injection is not claimed by the NO DATA
+fixture; these are separate hardware gates.
