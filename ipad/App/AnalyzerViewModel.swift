@@ -20,6 +20,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var bleStateObservation: AnyCancellable?
     private enum ResumeAfterBLELoss { case none, live, driving }
     private var resumeAfterBLELoss: ResumeAfterBLELoss = .none
+    private var expectedReconnectCapabilities: M5CANCapabilities?
     private var automaticRecoveryTask: Task<Void, Never>?
 
     @Published var autoReconnectEnabled = true {
@@ -101,6 +102,7 @@ final class AnalyzerViewModel: ObservableObject {
                 state == "gatt-error" || state == "bluetooth-unavailable" {
                 self.statusMessage = "BLE接続中断（\(self.ble.lastDisconnectReason ?? state)）。再接続とELM初期化が必要です"
             }
+            let previousCapabilities = self.session.negotiatedM5CAN
             if state == "connecting" || state == "disconnected" ||
                 state == "connect-failed" || state == "gatt-error" ||
                 state == "bluetooth-unavailable" {
@@ -117,7 +119,10 @@ final class AnalyzerViewModel: ObservableObject {
                 self.priority18Configured = false
             }
             if ["disconnected", "connect-failed", "gatt-error", "bluetooth-unavailable"].contains(state) {
-                self.beginAutomaticRecoveryIfNeeded(reason: self.ble.lastDisconnectReason ?? state)
+                self.beginAutomaticRecoveryIfNeeded(
+                    reason: self.ble.lastDisconnectReason ?? state,
+                    previousCapabilities: previousCapabilities
+                )
             }
         }
     }
@@ -125,12 +130,15 @@ final class AnalyzerViewModel: ObservableObject {
     /// In flight transactions are explicitly stopped before renegotiating with
     /// the exact same peripheral. Only live reads and verified positive DIDs
     /// are eligible for automatic resumption; unknown DID scans never are.
-    private func beginAutomaticRecoveryIfNeeded(reason: String) {
+    private func beginAutomaticRecoveryIfNeeded(
+        reason: String, previousCapabilities: M5CANCapabilities?
+    ) {
         guard autoReconnectEnabled, automaticRecoveryTask == nil,
               ble.canReconnectLastDevice, !reason.hasPrefix("manual-disconnect"),
               isRecording || isLivePolling || isDriveCollecting || isDidScanning else { return }
 
         resumeAfterBLELoss = isDriveCollecting ? .driving : (isLivePolling ? .live : .none)
+        expectedReconnectCapabilities = previousCapabilities
         // A BLE loss invalidates all in-flight responses and stationary proof.
         // DID exploration must be restarted manually after checking 0 km/h/P.
         if isDidScanning {
@@ -151,6 +159,7 @@ final class AnalyzerViewModel: ObservableObject {
 
     func cancelAutomaticRecovery() {
         resumeAfterBLELoss = .none
+        expectedReconnectCapabilities = nil
         automaticRecoveryTask?.cancel()
         automaticRecoveryTask = nil
         isAutoReconnecting = false
@@ -183,6 +192,12 @@ final class AnalyzerViewModel: ObservableObject {
               results.allSatisfy(\.success) else {
             recordLifecycleEvent(kind: "BLE_RECOVERY_VERIFY_FAIL", note: "ELM init failed")
             return false
+        }
+        if let expected = expectedReconnectCapabilities {
+            guard session.negotiatedM5CAN == expected else {
+                recordLifecycleEvent(kind: "BLE_RECOVERY_VERIFY_FAIL", note: "M5CAN firmware/protocol identity changed")
+                return false
+            }
         }
         if let caps = session.negotiatedM5CAN {
             vehicleProtocolLabel = caps.description
@@ -245,6 +260,7 @@ final class AnalyzerViewModel: ObservableObject {
         if restored && !Task.isCancelled && autoReconnectEnabled {
             let mode = resumeAfterBLELoss
             resumeAfterBLELoss = .none
+            expectedReconnectCapabilities = nil
             reconnectStatus = "BLE再接続・通信初期化完了"
             recordLifecycleEvent(kind: "BLE_RECOVERY_SUCCESS", note: "attempts=\(reconnectAttempt) resume=\(mode)")
             isAutoReconnecting = false
@@ -267,6 +283,7 @@ final class AnalyzerViewModel: ObservableObject {
             isAutoReconnecting = false
             automaticRecoveryTask = nil
             resumeAfterBLELoss = .none
+            expectedReconnectCapabilities = nil
             statusMessage = reconnectStatus
         }
     }
