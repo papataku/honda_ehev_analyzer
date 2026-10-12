@@ -40,6 +40,8 @@ import HondaAnalyzerCore
     private func run() async {
         let scenario = value("--soak-scenario", default: "idle")
         let seconds = min(3600, max(1, Double(value("--soak-seconds", default: "60")) ?? 60))
+        let delayMs = min(1000, max(0, Double(value("--soak-delay-ms", default: "200")) ?? 200))
+        let positiveRepeats = min(8, max(1, Int(value("--soak-positive-repeats", default: "1")) ?? 1))
         let keepAwake = value("--soak-keep-awake", default: "yes") == "yes"
         let previousIdle = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = keepAwake
@@ -65,7 +67,7 @@ import HondaAnalyzerCore
             store = try CaptureStore(url: folder.appendingPathComponent(runID + ".sqlite3"))
             store?.onError = { [weak self] error in Task { @MainActor in self?.ioError = "\(error)" } }
             sid = try store!.createSession(gitCommit: Bundle.main.object(forInfoDictionaryKey: "SoakGitSHA") as? String, toolVersion: "ipad-ble-soak", vehicle: "DEMO ONLY")
-            event("SOAK_START", "scenario=\(scenario) seconds=\(seconds) keep_awake=\(keepAwake) app_sha=\(Bundle.main.object(forInfoDictionaryKey: "SoakGitSHA") ?? "unknown")")
+            event("SOAK_START", "scenario=\(scenario) seconds=\(seconds) delay_ms=\(delayMs) positive_repeats=\(positiveRepeats) keep_awake=\(keepAwake) app_sha=\(Bundle.main.object(forInfoDictionaryKey: "SoakGitSHA") ?? "unknown")")
             observation = ble.$state.sink { [weak self] state in
                 guard let self else { return }
                 self.event("BLE_STATE", "state=\(state) reason=\(self.ble.lastDisconnectReason ?? "none")")
@@ -153,10 +155,12 @@ import HondaAnalyzerCore
                     // after a failed item/batch, with no reconnect/re-init.
                 }
                 if scenario == "batch" || scenario == "no-data" || scenario == "faults" {
-                    let (result, parsed) = try await session.batchRead(group: .mode01, ids: BLESoakPolicy.pids)
-                    guard result.success, parsed.items.count == 5 else { throw SoakError.response }
-                    completed += 1
-                    event("SAMPLE", "batch=\(completed) latency_ms=\(result.latencyMs)")
+                    for _ in 0..<positiveRepeats {
+                        let (result, parsed) = try await session.batchRead(group: .mode01, ids: BLESoakPolicy.pids)
+                        guard result.success, parsed.items.count == 5 else { throw SoakError.response }
+                        completed += 1
+                        event("SAMPLE", "batch=\(completed) latency_ms=\(result.latencyMs)")
+                    }
                 } else if scenario == "single" {
                     for command in BLESoakPolicy.pids {
                         let result = try await session.command(command)
@@ -166,7 +170,7 @@ import HondaAnalyzerCore
                     }
                 } else { event("IDLE_HEARTBEAT", "state=\(ble.state)") }
                 status = "\(scenario): \(completed) 応答 / 残り \(Int(max(0, end.timeIntervalSinceNow)))秒"
-                try await Task.sleep(nanoseconds: scenario == "idle" ? 1_000_000_000 : 200_000_000)
+                try await Task.sleep(nanoseconds: scenario == "idle" ? 1_000_000_000 : UInt64(delayMs * 1_000_000))
             }
             status = "試験終了: \(completed) 応答"
         } catch {
