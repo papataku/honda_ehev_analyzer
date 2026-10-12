@@ -10,7 +10,8 @@ struct ContentView: View {
     // Recording is retained across a transient BLE disconnect. Keep the display
     // awake while any acquisition is active, including reconnect/setup screens.
     private var requiresAwakeDisplay: Bool {
-        model.isRecording || model.isLivePolling || model.isDidScanning || model.isDriveCollecting
+        model.isRecording || model.isLivePolling || model.isDidScanning ||
+            model.isDriveCollecting || model.isAutoReconnecting
     }
 
     var body: some View {
@@ -26,10 +27,21 @@ struct ContentView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if model.ble.state != "ready" {
                         HStack(spacing: 12) {
-                            Label("Bluetooth接続が中断されました。記録は保持しています。", systemImage: "antenna.radiowaves.left.and.right.slash")
+                            Label(
+                                model.isAutoReconnecting
+                                    ? model.reconnectStatus
+                                    : "Bluetooth未接続。記録は保持されています。",
+                                systemImage: "antenna.radiowaves.left.and.right.slash"
+                            )
                             Spacer(minLength: 4)
-                            Button("再接続") { showConnectionScreen = true }
-                                .buttonStyle(.borderedProminent)
+                            if model.isAutoReconnecting {
+                                ProgressView()
+                                Button("自動復旧停止") { model.cancelAutomaticRecovery() }
+                                    .buttonStyle(.bordered)
+                            } else {
+                                Button("接続画面") { showConnectionScreen = true }
+                                    .buttonStyle(.borderedProminent)
+                            }
                         }
                         .font(.callout)
                         .padding(12)
@@ -127,6 +139,7 @@ private struct BLEConnectionView: View {
                         .buttonStyle(.borderedProminent)
 
                         Button("切断", role: .destructive) {
+                            model.cancelAutomaticRecovery()
                             model.ble.disconnect()
                         }
                     } else {
@@ -362,6 +375,7 @@ private struct BLEConnectionView: View {
 
     private func connect(_ device: BLEDevice) {
         do {
+            model.cancelAutomaticRecovery()
             try model.ble.connect(to: device.id)
         } catch {
             model.statusMessage = "BLE接続開始失敗: \(error.localizedDescription)"
