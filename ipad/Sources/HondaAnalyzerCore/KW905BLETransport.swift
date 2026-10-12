@@ -31,6 +31,9 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     @Published public private(set) var connectedDeviceName: String?
     @Published public private(set) var selectedWriteUUID: String?
     @Published public private(set) var selectedNotifyUUID: String?
+    // Read after a transport-state change; the state publisher fires once the
+    // disconnect reason has been captured on the CoreBluetooth callback queue.
+    public private(set) var lastDisconnectReason: String?
     public var onReceive: ((Data) -> Void)?
 
     private var central: CBCentralManager!
@@ -38,6 +41,7 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     private var peripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
     private var notifyCharacteristic: CBCharacteristic?
+    private var userRequestedDisconnect = false
 
     public override init() {
         super.init()
@@ -55,10 +59,19 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
     }
     public func connect(to id: UUID) throws {
         guard let target = discovered[id] else { throw BLETransportError.unknownDevice }
-        stopScan(); state = "connecting"; peripheral = target; target.delegate = self; central.connect(target)
+        stopScan()
+        lastDisconnectReason = nil
+        userRequestedDisconnect = false
+        state = "connecting"
+        peripheral = target
+        target.delegate = self
+        central.connect(target)
     }
     public func disconnect() {
-        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        if let peripheral {
+            userRequestedDisconnect = true
+            central.cancelPeripheralConnection(peripheral)
+        }
     }
     public func write(_ data: Data) throws {
         guard let peripheral, let characteristic = writeCharacteristic else { throw BLETransportError.notReady }
@@ -132,7 +145,10 @@ public final class KW905BLETransport: NSObject, ObservableObject, ElmByteTranspo
 
 extension KW905BLETransport: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state != .poweredOn { state = "bluetooth-unavailable" }
+        if central.state != .poweredOn {
+            lastDisconnectReason = "central-state=\(central.state.rawValue)"
+            state = "bluetooth-unavailable"
+        }
         else if state == "bluetooth-unavailable" { state = "idle" }
     }
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
@@ -149,9 +165,26 @@ extension KW905BLETransport: CBCentralManagerDelegate {
         peripheral.discoverServices(nil)
     }
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { return }
+        if let error = error as NSError? {
+            lastDisconnectReason = "connect-failed domain=\(error.domain) code=\(error.code) \(error.localizedDescription)"
+        } else {
+            lastDisconnectReason = "connect-failed without CoreBluetooth error"
+        }
         state = "connect-failed"
     }
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        // A callback from a superseded peripheral must not tear down the newer
+        // connection and force the workspace back to its initial state.
+        guard self.peripheral === peripheral else { return }
+        if userRequestedDisconnect {
+            lastDisconnectReason = "manual-disconnect"
+        } else if let error = error as NSError? {
+            lastDisconnectReason = "unexpected domain=\(error.domain) code=\(error.code) \(error.localizedDescription)"
+        } else {
+            lastDisconnectReason = "unexpected-disconnect-no-error"
+        }
+        userRequestedDisconnect = false
         writeCharacteristic = nil
         notifyCharacteristic = nil
         selectedWriteUUID = nil
