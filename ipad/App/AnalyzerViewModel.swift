@@ -78,6 +78,17 @@ final class AnalyzerViewModel: ObservableObject {
         }
         bleStateObservation = transport.$state.sink { [weak self] state in
             guard let self else { return }
+            if let store = self.captureStore, let sid = self.captureSessionID {
+                let reason = self.ble.lastDisconnectReason ?? "none"
+                store.addEvent(
+                    sessionID: sid, at: Date(), kind: "BLE_STATE",
+                    note: "state=\(state) reason=\(reason)"
+                )
+            }
+            if state == "disconnected" || state == "connect-failed" ||
+                state == "gatt-error" || state == "bluetooth-unavailable" {
+                self.statusMessage = "BLE接続中断（\(self.ble.lastDisconnectReason ?? state)）。再接続とELM初期化が必要です"
+            }
             if state == "connecting" || state == "disconnected" ||
                 state == "connect-failed" || state == "gatt-error" ||
                 state == "bluetooth-unavailable" {
@@ -113,6 +124,7 @@ final class AnalyzerViewModel: ObservableObject {
             let sid = try store.createSession(toolVersion: "ipad-native")
             captureStore = store
             captureSessionID = sid
+            store.addEvent(sessionID: sid, at: Date(), kind: "BLE_STATE", note: "state=\(ble.state) recording_start")
             saveBleSnapshot(store: store, sessionID: sid)
             recordingURL = url
             recordingFile = url.lastPathComponent
@@ -156,6 +168,13 @@ final class AnalyzerViewModel: ObservableObject {
         captureStore = nil
         captureSessionID = nil
         isRecording = false
+    }
+
+    // Low-volume forensic events: scene changes, display-idle policy and BLE transitions.
+    // Persist only during an active recording, never as unbounded UI transcript text.
+    func recordLifecycleEvent(kind: String, note: String) {
+        guard let store = captureStore, let sid = captureSessionID else { return }
+        store.addEvent(sessionID: sid, at: Date(), kind: kind, note: note)
     }
 
     func addMarker(_ kind: String) {
