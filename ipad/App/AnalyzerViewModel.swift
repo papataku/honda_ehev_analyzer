@@ -133,9 +133,16 @@ final class AnalyzerViewModel: ObservableObject {
     private func beginAutomaticRecoveryIfNeeded(
         reason: String, previousCapabilities: M5CANCapabilities?
     ) {
-        guard autoReconnectEnabled, automaticRecoveryTask == nil,
-              ble.canReconnectLastDevice, !reason.hasPrefix("manual-disconnect"),
-              isRecording || isLivePolling || isDriveCollecting || isDidScanning else { return }
+        guard automaticRecoveryTask == nil,
+              BLERecoveryPolicy.shouldReconnect(
+                  enabled: autoReconnectEnabled,
+                  hasKnownPeripheral: ble.canReconnectLastDevice,
+                  manualDisconnect: reason.hasPrefix("manual-disconnect"),
+                  isRecording: isRecording,
+                  isLivePolling: isLivePolling,
+                  isDriving: isDriveCollecting,
+                  isDidScanning: isDidScanning
+              ) else { return }
 
         resumeAfterBLELoss = isDriveCollecting ? .driving : (isLivePolling ? .live : .none)
         expectedReconnectCapabilities = previousCapabilities
@@ -227,7 +234,7 @@ final class AnalyzerViewModel: ObservableObject {
     private func runAutomaticRecovery() async {
         // Bounded exponential backoff. A failed reconnection must not loop
         // forever or continue sending queries to an unidentified adapter.
-        let delays: [Double] = [0, 1, 2, 4, 8, 16, 16, 16]
+        let delays = BLERecoveryPolicy.retryDelaysSeconds
         var restored = false
         for (index, delay) in delays.enumerated() {
             guard await recoverySleep(delay) else { break }
