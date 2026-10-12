@@ -41,7 +41,7 @@ import HondaAnalyzerCore
         let scenario = value("--soak-scenario", default: "idle")
         let seconds = min(3600, max(1, Double(value("--soak-seconds", default: "60")) ?? 60))
         let delayMs = min(1000, max(0, Double(value("--soak-delay-ms", default: "200")) ?? 200))
-        let positiveRepeats = min(8, max(1, Int(value("--soak-positive-repeats", default: "1")) ?? 1))
+        let positiveRepeats = min(32, max(1, Int(value("--soak-positive-repeats", default: "1")) ?? 1))
         let keepAwake = value("--soak-keep-awake", default: "yes") == "yes"
         let previousIdle = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = keepAwake
