@@ -217,6 +217,13 @@ final class AnalyzerViewModel: ObservableObject {
         udsBatchUnavailableForConnection = false
         activeHeaderCommand = nil
         priority18Configured = false
+        // Reconnect a record-only session without issuing vehicle diagnostics
+        // unexpectedly. Only a previously running live/drive task authorizes
+        // known-signal verification and automatic read-only resumption.
+        if resumeAfterBLELoss == .none {
+            knownSignalsValidated = false
+            return true
+        }
         do {
             try await prepareMode01()
             // Never resume on a stale cache or unverified/mismatched adapter.
