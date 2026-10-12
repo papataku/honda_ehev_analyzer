@@ -46,6 +46,9 @@ import HondaAnalyzerCore
         let previousIdle = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = keepAwake
         defer {
+            // Record local intent before the GAP teardown; clocks on the
+            // adapter host and iPad are independent.
+            event("SOAK_STOP_REQUEST", "failed=\(failed) elapsed=\(Date().timeIntervalSince(started))")
             ble.stopScan(); ble.disconnect()
             UIApplication.shared.isIdleTimerDisabled = previousIdle
             event("SOAK_END", "scenario=\(scenario) commands=\(completed) failed=\(failed) elapsed=\(Date().timeIntervalSince(started)) io_error=\(ioError ?? "none")")
