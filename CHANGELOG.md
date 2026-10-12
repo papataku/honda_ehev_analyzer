@@ -41,3 +41,7 @@ This changelog records release-level changes. Earlier detailed phase notes remai
 
 ## 0.2.8 and earlier
 See `README.md` and phase-specific documents in `docs/` for the detailed historical development record.
+
+
+## Unreleased — explicit debug BLE soak test
+- Add Mac-launched, bounded idle/single/batch DEMO-only test with separate SQLite/JSONL evidence, connection/lifecycle logging and scoped idle lock. Normal launch and driving/DID workflows are unchanged.
