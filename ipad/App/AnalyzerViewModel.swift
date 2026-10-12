@@ -18,6 +18,18 @@ final class AnalyzerViewModel: ObservableObject {
     private var priority18Configured = false
     private var bleObservation: AnyCancellable?
     private var bleStateObservation: AnyCancellable?
+    private enum ResumeAfterBLELoss { case none, live, driving }
+    private var resumeAfterBLELoss: ResumeAfterBLELoss = .none
+    private var automaticRecoveryTask: Task<Void, Never>?
+
+    @Published var autoReconnectEnabled = true {
+        didSet {
+            if !autoReconnectEnabled { cancelAutomaticRecovery() }
+        }
+    }
+    @Published private(set) var isAutoReconnecting = false
+    @Published private(set) var reconnectAttempt = 0
+    @Published private(set) var reconnectStatus = ""
 
     @Published var isBusy = false
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
@@ -104,6 +116,158 @@ final class AnalyzerViewModel: ObservableObject {
                 self.activeHeaderCommand = nil
                 self.priority18Configured = false
             }
+            if ["disconnected", "connect-failed", "gatt-error", "bluetooth-unavailable"].contains(state) {
+                self.beginAutomaticRecoveryIfNeeded(reason: self.ble.lastDisconnectReason ?? state)
+            }
+        }
+    }
+
+    /// In flight transactions are explicitly stopped before renegotiating with
+    /// the exact same peripheral. Only live reads and verified positive DIDs
+    /// are eligible for automatic resumption; unknown DID scans never are.
+    private func beginAutomaticRecoveryIfNeeded(reason: String) {
+        guard autoReconnectEnabled, automaticRecoveryTask == nil,
+              ble.canReconnectLastDevice, !reason.hasPrefix("manual-disconnect"),
+              isRecording || isLivePolling || isDriveCollecting || isDidScanning else { return }
+
+        resumeAfterBLELoss = isDriveCollecting ? .driving : (isLivePolling ? .live : .none)
+        // A BLE loss invalidates all in-flight responses and stationary proof.
+        // DID exploration must be restarted manually after checking 0 km/h/P.
+        if isDidScanning {
+            didScanStopRequested = true
+            didScanTask?.cancel()
+            recordLifecycleEvent(kind: "BLE_DID_SCAN_ABORT", note: "no automatic unknown-DID resume")
+        }
+        liveTask?.cancel()
+        driveCaptureTask?.cancel()
+        isAutoReconnecting = true
+        reconnectAttempt = 0
+        reconnectStatus = "Bluetooth切断：自動復旧を開始します"
+        recordLifecycleEvent(kind: "BLE_RECOVERY_START", note: "reason=\(reason) resume=\(resumeAfterBLELoss)")
+        automaticRecoveryTask = Task { [weak self] in
+            await self?.runAutomaticRecovery()
+        }
+    }
+
+    func cancelAutomaticRecovery() {
+        resumeAfterBLELoss = .none
+        automaticRecoveryTask?.cancel()
+        automaticRecoveryTask = nil
+        isAutoReconnecting = false
+        reconnectStatus = "自動再接続を停止しました"
+        recordLifecycleEvent(kind: "BLE_RECOVERY_CANCELLED", note: "manual")
+    }
+
+    private func recoverySleep(_ seconds: Double) async -> Bool {
+        if seconds > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        }
+        return !Task.isCancelled && autoReconnectEnabled
+    }
+
+    private func waitUntilOldAcquisitionStops() async -> Bool {
+        for _ in 0..<150 {
+            if !isLivePolling && !isDriveCollecting && !isDidScanning && !isBusy { return true }
+            guard await recoverySleep(0.1) else { return false }
+        }
+        return false
+    }
+
+    private func verifyReconnectedSession() async -> Bool {
+        guard ble.state == "ready", !Task.isCancelled else { return false }
+        isBusy = true
+        defer { isBusy = false }
+        let results = await session.initialize()
+        for result in results { append(result) }
+        guard !Task.isCancelled, ble.state == "ready",
+              results.allSatisfy(\.success) else {
+            recordLifecycleEvent(kind: "BLE_RECOVERY_VERIFY_FAIL", note: "ELM init failed")
+            return false
+        }
+        if let caps = session.negotiatedM5CAN {
+            vehicleProtocolLabel = caps.description
+            udsBatchStatusLabel = caps.supportsUDS22 ? "対応・未試行" : "非対応（個別通信）"
+        } else {
+            vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
+            udsBatchStatusLabel = "非対応（個別通信）"
+        }
+        elmInitialized = true
+        udsBatchUnavailableForConnection = false
+        activeHeaderCommand = nil
+        priority18Configured = false
+        do {
+            try await prepareMode01()
+            // Never resume on a stale cache or unverified/mismatched adapter.
+            try await pollKnownCycle(requireComplete: true)
+            guard ble.state == "ready", !Task.isCancelled else { return false }
+            knownSignalsValidated = true
+            return true
+        } catch {
+            knownSignalsValidated = false
+            recordLifecycleEvent(kind: "BLE_RECOVERY_VERIFY_FAIL", note: error.localizedDescription)
+            return false
+        }
+    }
+
+    private func runAutomaticRecovery() async {
+        // Bounded exponential backoff. A failed reconnection must not loop
+        // forever or continue sending queries to an unidentified adapter.
+        let delays: [Double] = [0, 1, 2, 4, 8, 16, 16, 16]
+        var restored = false
+        for (index, delay) in delays.enumerated() {
+            guard await recoverySleep(delay) else { break }
+            reconnectAttempt = index + 1
+            reconnectStatus = "Bluetooth再接続中（\(index + 1)/\(delays.count)）"
+            recordLifecycleEvent(kind: "BLE_RECOVERY_ATTEMPT", note: "attempt=\(index + 1)")
+            if ble.state != "ready" &&
+               !["connecting", "discovering-gatt", "enabling-notify"].contains(ble.state) {
+                do {
+                    try ble.reconnectLastDevice()
+                } catch {
+                    recordLifecycleEvent(kind: "BLE_RECOVERY_CONNECT_ERROR", note: error.localizedDescription)
+                }
+            }
+            for _ in 0..<100 {
+                if ble.state == "ready" { break }
+                if ["disconnected", "connect-failed", "gatt-error"].contains(ble.state) { break }
+                guard await recoverySleep(0.1) else { break }
+            }
+            guard !Task.isCancelled else { break }
+            guard ble.state == "ready" else { continue }
+            reconnectStatus = "接続復旧：通信と既知信号を再確認中"
+            guard await waitUntilOldAcquisitionStops() else { continue }
+            if await verifyReconnectedSession() {
+                restored = true
+                break
+            }
+        }
+
+        if restored && !Task.isCancelled && autoReconnectEnabled {
+            let mode = resumeAfterBLELoss
+            resumeAfterBLELoss = .none
+            reconnectStatus = "BLE再接続・通信初期化完了"
+            recordLifecycleEvent(kind: "BLE_RECOVERY_SUCCESS", note: "attempts=\(reconnectAttempt) resume=\(mode)")
+            isAutoReconnecting = false
+            automaticRecoveryTask = nil
+            switch mode {
+            case .driving:
+                if isRecording {
+                    startDriveCollection(preserveProgress: true)
+                    recordLifecycleEvent(kind: "DRIVE_CAPTURE_AUTO_RESUMED", note: "after BLE recovery")
+                }
+            case .live:
+                startLivePolling()
+                recordLifecycleEvent(kind: "LIVE_POLL_AUTO_RESUMED", note: "after BLE recovery")
+            case .none:
+                statusMessage = "BLE再接続完了。記録セッションを継続しています"
+            }
+        } else {
+            recordLifecycleEvent(kind: "BLE_RECOVERY_GAVE_UP", note: "attempts=\(reconnectAttempt) cancelled=\(Task.isCancelled)")
+            reconnectStatus = "再接続に失敗。手動で接続してください"
+            isAutoReconnecting = false
+            automaticRecoveryTask = nil
+            resumeAfterBLELoss = .none
+            statusMessage = reconnectStatus
         }
     }
 
@@ -302,6 +466,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopLivePolling() {
+        if isAutoReconnecting { resumeAfterBLELoss = .none }
         liveTask?.cancel()
         liveTask = nil
         isLivePolling = false
@@ -841,7 +1006,7 @@ final class AnalyzerViewModel: ObservableObject {
 
     /// Driving collection enumerates ALL previously complete-positive read-only DIDs.
     /// Adaptive scheduling moves stable payloads to sparse rechecks (never bans them).
-    func startDriveCollection() {
+    func startDriveCollection(preserveProgress: Bool = false) {
         guard !isBusy, !isDidScanning, !isLivePolling, !isDriveCollecting,
               ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
               let store = captureStore, let sid = captureSessionID else {
@@ -857,8 +1022,10 @@ final class AnalyzerViewModel: ObservableObject {
         let scheduler = schedulerFor(candidates)
         store.saveDrivePlan(sessionID: sid, at: Date(), candidates: candidates)
         isDriveCollecting = true
-        driveCollectedCount = 0
-        driveFieldCandidates = []
+        if !preserveProgress {
+            driveCollectedCount = 0
+            driveFieldCandidates = []
+        }
         driveCurrent = "車速・RPM・HV Power確認中"
         store.addEvent(
             sessionID: sid, at: Date(), kind: "DRIVE_CAPTURE_START",
@@ -938,6 +1105,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopDriveCollection() {
+        if isAutoReconnecting { resumeAfterBLELoss = .none }
         driveCaptureTask?.cancel()
         statusMessage = "走行解析収集を終了中。現在の要求完了を待っています"
     }
