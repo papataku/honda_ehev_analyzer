@@ -747,6 +747,15 @@ private struct SettingsPage: View {
                         "接続先",
                         value: model.ble.connectedDeviceName ?? "未接続"
                     )
+                    Toggle("BLE切断時に自動再接続して収集を再開", isOn: $model.autoReconnectEnabled)
+                    Text("SQLite記録は維持し、以前接続した同じ機器を最大8回再接続します。ELMの再初期化と既知信号の検証が成功した場合だけ、ライブ取得・確認済みDIDの走行収集を再開します。未知DID探索は安全のため自動再開しません。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if model.isAutoReconnecting {
+                        LabeledContent("復旧状態", value: model.reconnectStatus)
+                        Button("自動再接続を停止") { model.cancelAutomaticRecovery() }
+                            .buttonStyle(.bordered)
+                    }
                     LabeledContent(
                         "通信方式・版数",
                         value: model.vehicleProtocolLabel
