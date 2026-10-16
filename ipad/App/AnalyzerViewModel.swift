@@ -52,7 +52,9 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var didScanEffectiveRateHz = 0.0
     @Published var livePollingRequestRateHz = 5.0
     @Published var livePollingUnthrottled = false
-    @Published var liveEffectiveRequestRateHz = 0.0
+    @Published var liveEffectiveRequestRateHz = 0.0 // actual ELM commands per second
+    @Published var liveEffectivePIDRateHz = 0.0 // logical Mode01 PID requests per second
+    @Published var liveLastBatchSize = 1
     @Published var didScanProgress = 0.0
     @Published var didScanCurrent = "未開始"
     @Published var didPositiveCount = 0
@@ -375,6 +377,8 @@ final class AnalyzerViewModel: ObservableObject {
         }
         isLivePolling = true
         liveEffectiveRequestRateHz = 0
+        liveEffectivePIDRateHz = 0
+        liveLastBatchSize = 1
 
         let targetRate = max(1.0, livePollingRequestRateHz)
         let unthrottled = livePollingUnthrottled
@@ -419,7 +423,10 @@ final class AnalyzerViewModel: ObservableObject {
                         0.001,
                         Date().timeIntervalSince(cycleStarted)
                     )
-                    liveEffectiveRequestRateHz = Double(5 + selectedExtraPIDs.count) / cycleSeconds
+                    let batchEnabled = session.negotiatedM5CAN?.supportsOBD01 == true
+                    liveLastBatchSize = batchEnabled ? 5 : 1
+                    liveEffectiveRequestRateHz = Double((batchEnabled ? 1 : 5) + selectedExtraPIDs.count) / cycleSeconds
+                    liveEffectivePIDRateHz = Double(5 + selectedExtraPIDs.count) / cycleSeconds
                 }
             } catch is CancellationError {
             } catch {
@@ -437,6 +444,8 @@ final class AnalyzerViewModel: ObservableObject {
         liveTask = nil
         isLivePolling = false
         liveEffectiveRequestRateHz = 0
+        liveEffectivePIDRateHz = 0
+        liveLastBatchSize = 1
         statusMessage = "ライブ取得停止"
     }
 
@@ -1390,12 +1399,23 @@ final class AnalyzerViewModel: ObservableObject {
             for pid in selectedExtraPIDs.sorted() {
                 try Task.checkCancellation()
                 let cmd = String(format: "01%02X", pid)
-                let response = try await session.command(cmd)
-                append(response)
-                for reading in readStandardPID(pid, from: response.text, at: Date(),
-                                               latencyMs: response.latencyMs) {
-                    standardPIDInventory.addReading(reading)
-                    saveStandardPIDReading(reading)
+                do {
+                    let response = try await session.command(cmd)
+                    append(response)
+                    let readings = readStandardPID(pid, from: response.text, at: Date(),
+                                                   latencyMs: response.latencyMs)
+                    if readings.isEmpty {
+                        standardPIDInventory.addFailure(pid: pid, status: .noData)
+                        recordLifecycleEvent(kind: "PID_OPTIONAL_NO_DATA", note: "pid=\(cmd)")
+                    }
+                    for reading in readings {
+                        standardPIDInventory.addReading(reading)
+                        saveStandardPIDReading(reading)
+                    }
+                } catch {
+                    // An optional extra PID must never stop baseline RPM/speed/HV.
+                    standardPIDInventory.addFailure(pid: pid, status: .timeout)
+                    recordLifecycleEvent(kind: "PID_OPTIONAL_ERROR", note: "pid=\(cmd) \(error)")
                 }
             }
         }
