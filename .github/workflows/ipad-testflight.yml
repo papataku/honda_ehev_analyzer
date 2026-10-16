@@ -107,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           PROFILE_NAME="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .name' <<< "$PROFILES")"
-          PROFILE_UUID="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .uuid' <<< "$PROFILES")"
+          PROFILE_UUID="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .udid' <<< "$PROFILES")"
           PROFILE_PATH="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
           test -s "$PROFILE_PATH"
           security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/profile.plist"
