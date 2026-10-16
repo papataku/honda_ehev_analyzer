@@ -170,6 +170,9 @@ private struct DashboardPage: View {
                         if model.isLivePolling {
                             StatusPill(text: "LIVE", systemImage: "waveform.path.ecg", style: .good)
                         }
+                        if model.isUnifiedCollecting {
+                            StatusPill(text: "AUTO", systemImage: "arrow.triangle.2.circlepath", style: .good)
+                        }
                         if model.isDriveCollecting {
                             StatusPill(text: "DRIVE", systemImage: "chart.xyaxis.line", style: .active)
                         }
@@ -205,6 +208,10 @@ private struct DashboardPage: View {
                     DashboardMetric(title: "HV VOLTAGE", value: model.hvVoltage.map { String(format: "%.1f", $0) } ?? "--", unit: "V", symbol: "bolt.fill")
                     DashboardMetric(title: "HV CURRENT", value: model.hvCurrent.map { String(format: "%.1f", $0) } ?? "--", unit: "A", symbol: "arrow.up.arrow.down")
                     DashboardMetric(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW", symbol: "waveform.path.ecg")
+                }
+
+                if model.isUnifiedCollecting || !model.changingSignals.isEmpty {
+                    AutomaticSignalTrendsView(model: model)
                 }
 
                 if model.liveSamples.count >= 2 {
