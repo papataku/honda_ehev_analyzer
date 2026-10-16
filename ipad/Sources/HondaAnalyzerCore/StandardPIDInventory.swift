@@ -77,6 +77,7 @@ public enum StandardPIDSampleStatus: String, Codable, Sendable {
     case decoded
     case uninterpreted
     case shortResponse = "short_response"
+    case partialResponse = "positive_partial"
     case noData = "no_data"
     case timeout
 }
@@ -130,7 +131,7 @@ private func standardPIDValue(_ pid: UInt8, _ p: [UInt8]) -> Double? {
 
 public func readStandardPID(_ pid: UInt8, from text: String, at timestamp: Date = Date(),
                             latencyMs: Double? = nil) -> [StandardPIDReading] {
-    allMode01Payloads(text, pid: pid).map { item in
+    var rows = allMode01Payloads(text, pid: pid).map { item in
         let payload = [UInt8](item.data)
         let definition = standardPIDCatalog[pid]
         let value = standardPIDValue(pid, payload)
@@ -149,6 +150,18 @@ public func readStandardPID(_ pid: UInt8, from text: String, at timestamp: Date 
             value: value, unit: definition?.unit, latencyMs: latencyMs
         )
     }
+    // Truncated ISO-TP data are evidence, not complete decoded measurements.
+    let prefix = Data([0x41, pid])
+    for fragment in isoTpPartialMessages(text) where fragment.payload.starts(with: prefix) {
+        let received = fragment.payload.dropFirst(2)
+        rows.append(StandardPIDReading(
+            pid: pid, responseCANID: fragment.canID, timestamp: timestamp,
+            status: .partialResponse,
+            payloadHex: received.map { String(format: "%02X", $0) }.joined(),
+            value: nil, unit: standardPIDCatalog[pid]?.unit, latencyMs: latencyMs
+        ))
+    }
+    return rows
 }
 
 public struct StandardPIDInventoryRow: Identifiable, Codable, Sendable {
@@ -193,7 +206,7 @@ public struct StandardPIDInventory {
     /// ECUs that previously advertised support, without fabricating a new responder.
     public mutating func addFailure(pid: UInt8, status: StandardPIDSampleStatus) {
         guard status == .noData || status == .timeout else { return }
-        for key in rows.keys {
+        for key in Array(rows.keys) {
             guard var row = rows[key], row.pid == pid else { continue }
             row.attempts += 1
             row.latestStatus = status
