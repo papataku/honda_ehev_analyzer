@@ -38,6 +38,13 @@ struct StandardPIDPage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if model.isUnifiedCollecting {
+                    AnalyzerCard("統合収集で自動調査中", systemImage: "waveform.path.ecg") {
+                        Text("統合収集では、標準PIDの対応調査と変化検出をすでに自動実行しています。別の調査を開始する必要はありません。")
+                            .font(.callout)
+                    }
+                }
+
                 AnalyzerCard("調査の状態", systemImage: "magnifyingglass.circle") {
                     VStack(alignment: .leading, spacing: 12) {
                         Label(model.isRecording ? "SQLite記録中（画面の自動スリープを防止）" : "SQLite記録が必要です",
@@ -62,7 +69,8 @@ struct StandardPIDPage: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(!ready || model.isBusy || model.isLivePolling ||
-                                      model.isDidScanning || model.isDriveCollecting)
+                                      model.isDidScanning || model.isDriveCollecting ||
+                                      model.isUnifiedCollecting)
                         }
                         if !ready {
                             Text("次の操作：ダッシュボードで接続・記録・初期化・既知信号確認を順に完了してください。")
