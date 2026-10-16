@@ -11,7 +11,8 @@ struct ContentView: View {
     /// SQLite recording keeps the display awake even if BLE temporarily drops.
     private var requiresAwakeDisplay: Bool {
         model.isRecording || model.isLivePolling ||
-        model.isDidScanning || model.isDriveCollecting || model.isStandardPIDSurveying
+        model.isDidScanning || model.isDriveCollecting ||
+        model.isStandardPIDSurveying || model.isUnifiedCollecting
     }
 
     var body: some View {
