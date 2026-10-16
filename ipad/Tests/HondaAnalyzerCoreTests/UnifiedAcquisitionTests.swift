@@ -65,11 +65,11 @@ final class UnifiedAcquisitionTests: XCTestCase {
         let first = p.next(isMoving: false, zeroSpeedAuthorized: true,
                            hasBitmap: true, hasStandardPID: true,
                            hasKnownDID: true, hasUnknownDID: true)
-        XCTAssertEqual(first, .stationaryUnknownDID)
+        XCTAssertEqual(first, .supportedPIDBitmap)
         let second = p.next(isMoving: false, zeroSpeedAuthorized: true,
                             hasBitmap: true, hasStandardPID: true,
                             hasKnownDID: true, hasUnknownDID: true)
-        XCTAssertEqual(second, .supportedPIDBitmap)
+        XCTAssertEqual(second, .stationaryUnknownDID)
     }
 
     func testAutomaticallyShowsChangingNumericsButHidesConstantOnes() {
