@@ -3,7 +3,9 @@ name: iPad Regression
 on:
   push:
     branches:
+      - main
       - ipad-native
+      - feature/ipad-standard-pid-inventory-issue12
     paths:
       - "ipad/**"
       - ".github/workflows/ipad-core.yml"
@@ -18,7 +20,6 @@ concurrency:
 
 jobs:
   regression:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -27,6 +28,9 @@ jobs:
       - name: Swift toolchain
         working-directory: ipad
         run: swift --version
+
+      - name: Validate home Wi-Fi deploy script
+        run: bash -n ipad/Scripts/install_wifi.sh
 
       - name: Build and test HondaAnalyzerCore
         working-directory: ipad
