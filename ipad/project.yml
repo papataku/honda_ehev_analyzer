@@ -1,0 +1,44 @@
+name: HondaAnalyzer
+options:
+  createIntermediateGroups: true
+packages:
+  HondaAnalyzerCore:
+    path: .
+targets:
+  HondaAnalyzer:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: HondaAnalyzerCore
+        product: HondaAnalyzerCore
+    preBuildScripts:
+      - name: Generate App Icon
+        inputFiles:
+          - $(SRCROOT)/Tools/GenerateAppIcon.swift
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/Contents.json
+        outputFiles:
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+        script: |
+          env -u SDKROOT -u PLATFORM_NAME -u EFFECTIVE_PLATFORM_NAME \
+            xcrun --sdk macosx swift \
+            "$SRCROOT/Tools/GenerateAppIcon.swift" \
+            "$SRCROOT/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.papataku.HondaAnalyzer
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Honda Analyzer
+        NSBluetoothAlwaysUsageDescription: Honda e:HEV vehicle data is read from the KW905 BLE adapter.
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - bluetooth-central
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true

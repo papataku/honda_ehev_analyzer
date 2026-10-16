@@ -28,6 +28,23 @@ Updated baseline: v0.3.4 — Long DID Recovery, plus Session 16 vehicle evidence
 - Session 16 compact ATH0 retry preserved longer prefixes but did not fully recover the long Positive payloads; these remain evidence-preserving `positive_partial` records.
 - Session 16 again confirmed DID 2012 byte 5 as a strong PID-5B SOC mirror candidate (Pearson about 0.9985 in the available aligned points).
 
+## iPad native validation — 2026-10-04
+
+The first physical iPad/KW905/RP8 capture has passed the iPad hardware gate.
+
+- CoreBluetooth selected the expected KW905 path: FFF0 / FFF1 notify / FFF2 write-without-response.
+- ELM initialization reported ELM327 v1.5 and ISO 15765-4 CAN 29-bit / 500 kbps.
+- Standard known signals 010C / 010D / 0105 / 015B / 019A were read successfully.
+- The iPad SQLite capture closed cleanly and passed `PRAGMA integrity_check`.
+- Safe ECU census observed the same Mode 01 responder set used by the macOS workflow.
+- Source-01 stationary DID discovery covered 2000–207B before manual stop.
+- The scanned subset produced exactly 6 complete Positive + 11 positive_partial DIDs matching the prior Session-15 source-01 inventory in that range.
+- Real BUFFER FULL handling was exercised for all 11 long positives.
+- ATH0 compact retry increased preserved application prefixes from about 70–78 bytes to 108–112 bytes, but still did not recover the complete long payload.
+- The raw user capture is not committed; only these validation conclusions are retained.
+
+With the hardware gate passed, the iPad branch is moving to the same adaptive full-range ordering as macOS, while retaining read-only 0x22 and stationary speed monitoring.
+
 ## Current unresolved goals
 1. Perform a longer drive sweep with the expanded cross-session Positive inventory, especially the newly discovered ECU-source 0E/EF DIDs.
 2. Obtain at least five changing samples per DID where possible so the existing field-ranking pipeline can evaluate EV-speed, engine-RPM, HV-power/current and SOC correlations.
