@@ -1,0 +1,97 @@
+name: Honda Analyzer — Home iPad Wi-Fi Install
+
+# Dispatch definition stays on main. Signing stays solely on the home Mac.
+# This workflow neither uses Apple Distribution secrets nor TestFlight.
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Install this version of the iPad app"
+        type: choice
+        required: true
+        default: feature/ipad-standard-pid-inventory-issue12
+        options:
+          - feature/ipad-standard-pid-inventory-issue12
+          - main
+      run_core_tests:
+        description: "Run Swift core regression tests before installation"
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-ipad-wifi-install
+  cancel-in-progress: false
+
+jobs:
+  wifi-install:
+    # Install only by deliberate workflow_dispatch from the trusted main branch.
+    if: github.ref == 'refs/heads/main'
+    environment: home-ipad
+    # A native logged-in macOS session is REQUIRED for keychain + CoreDevice.
+    # Linux/Docker and a remotely hosted macOS runner cannot reach the iPad LAN.
+    runs-on: [self-hosted, macOS, honda-ipad-deploy]
+    timeout-minutes: 50
+    steps:
+      - name: Preflight Personal Team and iPad selection
+        shell: bash
+        env:
+          HONDA_IPAD_DEVICE_ID: ${{ vars.HONDA_IPAD_DEVICE_ID }}
+          HONDA_APPLE_TEAM_ID: ${{ vars.HONDA_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$HONDA_IPAD_DEVICE_ID" || {
+            echo "::error::Set HONDA_IPAD_DEVICE_ID in GitHub Actions variables."
+            exit 1
+          }
+          test -n "$HONDA_APPLE_TEAM_ID" || {
+            echo "::error::Set HONDA_APPLE_TEAM_ID in GitHub Actions variables."
+            exit 1
+          }
+          test "$(uname -s)" = "Darwin" || {
+            echo "::error::Use a native macOS runner, not Docker/Linux."
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Verify native macOS tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ipad/Scripts/install_wifi.sh
+          xcodebuild -version
+          xcrun devicectl list devices
+
+      - name: Run Swift core tests
+        if: inputs.run_core_tests
+        working-directory: ipad
+        shell: bash
+        run: swift test
+
+      - name: Build, sign and install over Wi-Fi
+        shell: bash
+        env:
+          HONDA_IPAD_DEVICE_ID: ${{ vars.HONDA_IPAD_DEVICE_ID }}
+          HONDA_APPLE_TEAM_ID: ${{ vars.HONDA_APPLE_TEAM_ID }}
+        run: bash ipad/Scripts/install_wifi.sh
+
+      - name: Summarize deployment
+        if: success()
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          {
+            echo "### Wireless iPad install completed"
+            echo "Ref: $SOURCE_REF"
+            echo "Bundle: com.papataku.HondaAnalyzer"
+            echo "Signed by the locally configured Xcode Personal Team."
+            echo "Expires after 7 days: trigger another install before then."
+          } >> "$GITHUB_STEP_SUMMARY"
