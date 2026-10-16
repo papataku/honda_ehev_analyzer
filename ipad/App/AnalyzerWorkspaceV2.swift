@@ -69,7 +69,8 @@ struct FinalAnalyzerWorkspace: View {
                         model: model,
                         onOpenConnection: onOpenConnection,
                         onOpenDriving: { selection = .driving },
-                        onOpenDiscovery: { selection = .discovery }
+                        onOpenDiscovery: { selection = .discovery },
+                        onOpenStandardPID: { selection = .standardPID }
                     )
                 case .driving:
                     DrivingAnalysisPage(
@@ -144,6 +145,7 @@ private struct DashboardPage: View {
     let onOpenConnection: () -> Void
     let onOpenDriving: () -> Void
     let onOpenDiscovery: () -> Void
+    let onOpenStandardPID: () -> Void
 
     private let metricColumns = [
         GridItem(.adaptive(minimum: 180, maximum: 300), spacing: 12)
@@ -190,7 +192,8 @@ private struct DashboardPage: View {
                     OperationModeCards(
                         model: model,
                         onOpenDriving: onOpenDriving,
-                        onOpenDiscovery: onOpenDiscovery
+                        onOpenDiscovery: onOpenDiscovery,
+                        onOpenStandardPID: onOpenStandardPID
                     )
                 }
 
