@@ -249,12 +249,19 @@ public func standardPIDJSON(_ rows: [StandardPIDInventoryRow]) throws -> Data {
 public func standardPIDCSV(_ rows: [StandardPIDInventoryRow]) -> String {
     func quote(_ string: String) -> String { "\"" + string.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
     let header = "id,can_id,pid,name,unit,formula,bitmap_supported,attempts,samples,status,latest,min,max,effective_hz,payload_hex"
-    let lines = rows.map { r in
-        [r.id, r.responseCANID ?? "", String(format: "%02X", r.pid), r.name, r.unit, r.formula,
-         r.bitmapSupported ? "true" : "false", String(r.attempts), String(r.successfulSamples),
-         r.latestStatus.rawValue, r.latestValue.map { String($0) } ?? "",
-         r.minimum.map { String($0) } ?? "", r.maximum.map { String($0) } ?? "",
-         r.effectiveHz.map { String($0) } ?? "", r.lastPayloadHex].map(quote).joined(separator: ",")
+    let lines: [String] = rows.map { r in
+        let latest = r.latestValue.map { String($0) } ?? ""
+        let minimum = r.minimum.map { String($0) } ?? ""
+        let maximum = r.maximum.map { String($0) } ?? ""
+        let rate = r.effectiveHz.map { String($0) } ?? ""
+        let values: [String] = [
+            r.id, r.responseCANID ?? "", String(format: "%02X", r.pid),
+            r.name, r.unit, r.formula,
+            r.bitmapSupported ? "true" : "false",
+            String(r.attempts), String(r.successfulSamples), r.latestStatus.rawValue,
+            latest, minimum, maximum, rate, r.lastPayloadHex
+        ]
+        return values.map { quote($0) }.joined(separator: ",")
     }
     return ([header] + lines).joined(separator: "\n") + "\n"
 }
