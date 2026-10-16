@@ -101,7 +101,8 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    public func appendCommand(sessionID: Int64, at date: Date, result: ElmCommandResult) {
+    public func appendCommand(sessionID: Int64, at date: Date, result: ElmCommandResult,
+                              syntheticBatchItem: Bool = false) {
         queue.async { [weak self] in
             guard let self else { return }
             do {
@@ -111,7 +112,11 @@ public final class CaptureStore: @unchecked Sendable {
                 self.bindText(s, 2, self.timestamp(date))
                 self.bindText(s, 3, result.command)
                 self.bindBlob(s, 4, result.raw)
-                sqlite3_bind_double(s, 5, result.latencyMs)
+                if syntheticBatchItem {
+                    sqlite3_bind_null(s, 5) // per-item RTT is unknown for tagged batch replies
+                } else {
+                    sqlite3_bind_double(s, 5, result.latencyMs)
+                }
                 sqlite3_bind_int(s, 6, result.success ? 1 : 0)
                 try self.stepDone(s)
             } catch { self.report(error) }

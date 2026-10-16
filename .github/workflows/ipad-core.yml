@@ -3,7 +3,9 @@ name: iPad Regression
 on:
   push:
     branches:
+      - main
       - ipad-native
+      - feature/ipad-standard-pid-inventory-issue12
     paths:
       - "ipad/**"
       - ".github/workflows/ipad-core.yml"
@@ -18,7 +20,7 @@ concurrency:
 
 jobs:
   regression:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # Same-repository PRs must run too; previous predicate skipped all of them.
     runs-on: macos-15
     timeout-minutes: 20
     steps:

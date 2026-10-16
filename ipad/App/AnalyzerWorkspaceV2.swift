@@ -5,6 +5,7 @@ import HondaAnalyzerCore
 enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case driving
+    case standardPID
     case discovery
     case sessions
     case technical
@@ -16,6 +17,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "ダッシュボード"
         case .driving: return "走行解析"
+        case .standardPID: return "追加メーター候補"
         case .discovery: return "DID探索"
         case .sessions: return "セッション"
         case .technical: return "技術情報"
@@ -27,6 +29,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.50percent"
         case .driving: return "chart.xyaxis.line"
+        case .standardPID: return "list.bullet.rectangle"
         case .discovery: return "magnifyingglass.circle"
         case .sessions: return "externaldrive.fill"
         case .technical: return "terminal"
@@ -66,7 +69,8 @@ struct FinalAnalyzerWorkspace: View {
                         model: model,
                         onOpenConnection: onOpenConnection,
                         onOpenDriving: { selection = .driving },
-                        onOpenDiscovery: { selection = .discovery }
+                        onOpenDiscovery: { selection = .discovery },
+                        onOpenStandardPID: { selection = .standardPID }
                     )
                 case .driving:
                     DrivingAnalysisPage(
@@ -74,6 +78,8 @@ struct FinalAnalyzerWorkspace: View {
                         onOpenDiscovery: { selection = .discovery },
                         onOpenDashboard: { selection = .dashboard }
                     )
+                case .standardPID:
+                    StandardPIDPage(model: model)
                 case .discovery:
                     DiscoveryPage(model: model)
                 case .sessions:
@@ -139,6 +145,7 @@ private struct DashboardPage: View {
     let onOpenConnection: () -> Void
     let onOpenDriving: () -> Void
     let onOpenDiscovery: () -> Void
+    let onOpenStandardPID: () -> Void
 
     private let metricColumns = [
         GridItem(.adaptive(minimum: 180, maximum: 300), spacing: 12)
@@ -163,6 +170,9 @@ private struct DashboardPage: View {
                         if model.isLivePolling {
                             StatusPill(text: "LIVE", systemImage: "waveform.path.ecg", style: .good)
                         }
+                        if model.isUnifiedCollecting {
+                            StatusPill(text: "AUTO", systemImage: "arrow.triangle.2.circlepath", style: .good)
+                        }
                         if model.isDriveCollecting {
                             StatusPill(text: "DRIVE", systemImage: "chart.xyaxis.line", style: .active)
                         }
@@ -185,7 +195,8 @@ private struct DashboardPage: View {
                     OperationModeCards(
                         model: model,
                         onOpenDriving: onOpenDriving,
-                        onOpenDiscovery: onOpenDiscovery
+                        onOpenDiscovery: onOpenDiscovery,
+                        onOpenStandardPID: onOpenStandardPID
                     )
                 }
 
@@ -197,6 +208,10 @@ private struct DashboardPage: View {
                     DashboardMetric(title: "HV VOLTAGE", value: model.hvVoltage.map { String(format: "%.1f", $0) } ?? "--", unit: "V", symbol: "bolt.fill")
                     DashboardMetric(title: "HV CURRENT", value: model.hvCurrent.map { String(format: "%.1f", $0) } ?? "--", unit: "A", symbol: "arrow.up.arrow.down")
                     DashboardMetric(title: "HV POWER", value: model.hvPowerKW.map { String(format: "%.1f", $0) } ?? "--", unit: "kW", symbol: "waveform.path.ecg")
+                }
+
+                if model.isUnifiedCollecting || !model.changingSignals.isEmpty {
+                    AutomaticSignalTrendsView(model: model)
                 }
 
                 if model.liveSamples.count >= 2 {
@@ -709,8 +724,13 @@ private struct TechnicalPage: View {
                         LabeledContent("記録", value: model.isRecording ? "記録中" : "停止")
                         LabeledContent("DID", value: model.didScanCurrent)
                         LabeledContent(
-                            "ライブ実効レート",
+                            "実ELMコマンド",
                             value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+                        LabeledContent(
+                            "実PID要求",
+                            value: String(format: "%.1f PID/s（バッチ %d件）",
+                                          model.liveEffectivePIDRateHz, model.liveLastBatchSize)
                         )
                         LabeledContent(
                             "DID実効レート",
@@ -784,8 +804,13 @@ private struct SettingsPage: View {
                         .disabled(model.isLivePolling)
 
                         LabeledContent(
-                            "ライブ実効レート",
+                            "実ELMコマンド",
                             value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+                        LabeledContent(
+                            "実PID要求",
+                            value: String(format: "%.1f PID/s（バッチ %d件）",
+                                          model.liveEffectivePIDRateHz, model.liveLastBatchSize)
                         )
 
                         Divider()
