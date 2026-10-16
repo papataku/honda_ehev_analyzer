@@ -58,12 +58,15 @@ mkdir -p "$DERIVED"
 cd "$IPAD_DIR"
 xcodegen generate
 
-# The free Personal Team is managed by Xcode, without any App Store secrets.
-# Build for the specific physical device to create the right development profile.
+# devicectl can print a CoreDevice ID that differs from the hardware
+# UDID expected by xcodebuild -destination. Build a generic *physical iOS*
+# app, then use the exact CoreDevice ID only to install on the selected iPad.
+# First pair/register this iPad in Xcode once so the free Personal Team
+# development profile already contains the physical device.
 xcodebuild \
   -project HondaAnalyzer.xcodeproj \
   -scheme HondaAnalyzer -configuration Debug \
-  -sdk iphoneos -destination "platform=iOS,id=$DEVICE_ID" \
+  -sdk iphoneos -destination 'generic/platform=iOS' \
   -derivedDataPath "$DERIVED" \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
   "DEVELOPMENT_TEAM=$TEAM_ID" CODE_SIGN_STYLE=Automatic build
