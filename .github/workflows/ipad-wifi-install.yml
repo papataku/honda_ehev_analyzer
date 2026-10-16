@@ -39,12 +39,12 @@ jobs:
       - name: Preflight Personal Team and iPad selection
         shell: bash
         env:
-          HONDA_IPAD_DEVICE_ID: ${{ vars.HONDA_IPAD_DEVICE_ID }}
+          HONDA_IPAD_DEVICE_ID: ${{ secrets.HONDA_IPAD_DEVICE_ID }}
           HONDA_APPLE_TEAM_ID: ${{ vars.HONDA_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           test -n "$HONDA_IPAD_DEVICE_ID" || {
-            echo "::error::Set HONDA_IPAD_DEVICE_ID in GitHub Actions variables."
+            echo "::error::Set HONDA_IPAD_DEVICE_ID in GitHub Actions secrets."
             exit 1
           }
           test -n "$HONDA_APPLE_TEAM_ID" || {
@@ -67,7 +67,8 @@ jobs:
           set -euo pipefail
           bash -n ipad/Scripts/install_wifi.sh
           xcodebuild -version
-          xcrun devicectl list devices
+          # Device identities are intentionally not printed into Actions logs.
+          # The install script checks the selected device privately.
 
       - name: Run Swift core tests
         if: inputs.run_core_tests
@@ -78,7 +79,7 @@ jobs:
       - name: Build, sign and install over Wi-Fi
         shell: bash
         env:
-          HONDA_IPAD_DEVICE_ID: ${{ vars.HONDA_IPAD_DEVICE_ID }}
+          HONDA_IPAD_DEVICE_ID: ${{ secrets.HONDA_IPAD_DEVICE_ID }}
           HONDA_APPLE_TEAM_ID: ${{ vars.HONDA_APPLE_TEAM_ID }}
         run: bash ipad/Scripts/install_wifi.sh
 
