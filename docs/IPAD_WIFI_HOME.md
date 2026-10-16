@@ -28,9 +28,12 @@ Mac/iPad上で行ってください。
   **初回はXcodeのRun Destinationで対象iPadを選び、実機Runを1回完了**させて、
   Personal Teamの開発用プロファイルにそのiPadを登録してください。
   端末登録や開発者アカウントの承認などをXcodeが要求したらMac上で許可します。
-  以後のスクリプトは`generic/platform=iOS`で署名ビルドし、
-  `devicectl`のデバイスIDを用いてインストールするため、
-  `xcodebuild`が期待するUDIDとCoreDevice識別子の違いに影響されません。
+  **署名成功後の`HondaAnalyzer.xcodeproj`をそのまま残してください。**
+  スクリプトは`xcodegen generate`を繰り返さず、Xcodeで設定した
+  Signing & Capabilitiesを保持して、実機iPadを指定してビルドします。
+  プロジェクト未作成の場合だけXcodeGenを実行し、署名設定・実機Runを促して一旦停止します。
+  `devicectl`のCoreDevice識別子がXcodeのiPad UDIDと異なる場合のみ
+  `--xcode-device`でXcode側UDIDを別途指定してください。
   このリポジトリのTeam設定はコミットしなくて構いません。
 - iPadで「未信頼のデベロッパ」等の警告が出たときは
   iPad Settings → General → VPN & Device Management で開発者を信頼。
@@ -45,10 +48,12 @@ Apple公式：
 Mac miniの**いつものログインユーザー**で実行：
 
 ```bash
-git clone https://github.com/papataku/honda_ehev_analyzer.git
-cd honda_ehev_analyzer
+cd ~/Developer/honda_ehev_analyzer
 git fetch origin
 git switch feature/ipad-standard-pid-inventory-issue12
+git pull --ff-only
+
+# Xcodeで実機ビルドに成功したHondaAnalyzer.xcodeprojは削除しない
 
 # ペアリングできたiPadの識別子を表示
 bash ipad/Scripts/install_wifi.sh --list-devices
@@ -60,6 +65,19 @@ bash ipad/Scripts/install_wifi.sh --team YOURTEAMID --device YOUR_IPAD_ID
 `YOURTEAMID` はXcodeのPersonal Team（10桁英数字）。
 `YOUR_IPAD_ID` はDevice Hub / `devicectl`に表示された対象iPadのID。
 複数デバイス接続時の誤インストールを避けるため、**対象ID指定は必須**です。
+XcodeのiPad UDIDとCoreDevice IDが異なる場合は次のように分離できます：
+
+```bash
+bash ipad/Scripts/install_wifi.sh \
+  --team UPXY83S8SR \
+  --device <devicectlで表示されたiPadのID> \
+  --xcode-device <xcodebuild-showdestinationsのiPadUDID>
+```
+
+2026-10-16の実機診断：`DEVELOPMENT_TEAM`や`CODE_SIGN_STYLE`をCLIから
+強制すると`No Account for Team`が発生しましたが、これらを渡さず、
+既存のXcodeプロジェクトで実機ビルドすると成功しました。
+修正済みスクリプトは署名設定を**上書きしません**。
 スクリプトは既存アプリを**削除しません**。インストールだけ行い、自動起動もしません
 （`--launch` を指定した場合のみ起動）。実行前に車両データの記録を停止してください。
 
@@ -91,6 +109,11 @@ Xcode・ログインユーザーのKeychain・Device Hubへのアクセスが必
 2. Mac miniの**Xcodeにログイン済みの同じユーザー**でRunnerを実行。
    初回は `./run.sh` などで対話的に動作確認し、Keychainが利用可能か確認。
    Mac miniでログアウトした状態やDockerでの使用は想定していません。
+   ワークフローは新しい一時チェックアウトではなく、デフォルトで
+   **`~/Developer/honda_ehev_analyzer`の既存チェックアウト**から実行します。
+   これはGUIで成功した`.xcodeproj`署名設定を保持するためです。
+   別の保存先を使う場合はGitHub Actions Variable `HONDA_LOCAL_REPO_DIR` を設定します。
+   ワークフローは追跡済みファイルにローカル変更がある場合、上書きせずに停止します。
 3. GitHub → Settings → Secrets and variables → Actions に登録：
    - **Variables**: `HONDA_APPLE_TEAM_ID` = XcodeのPersonal Team ID
    - **Secrets**: `HONDA_IPAD_DEVICE_ID` = Wi-Fiペアリング済みiPadのDevice Hub識別子
