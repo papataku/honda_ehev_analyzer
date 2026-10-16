@@ -56,32 +56,66 @@ jobs:
             exit 1
           }
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_ref }}
-          persist-credentials: false
+      # This runner MUST reuse the persistent Xcode project where the user
+      # already selected their free Personal Team. actions/checkout creates a
+      # new working directory and discards those local signing settings.
+      - name: Update persistent home checkout (preserve Xcode signing)
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          CONFIGURED_DIR: ${{ vars.HONDA_LOCAL_REPO_DIR }}
+        run: |
+          set -euo pipefail
+          case "$SOURCE_REF" in
+            main|feature/ipad-standard-pid-inventory-issue12) ;;
+            *) echo "::error::Unsupported source_ref"; exit 1 ;;
+          esac
+          REPO_DIR="${CONFIGURED_DIR:-$HOME/Developer/honda_ehev_analyzer}"
+          test -d "$REPO_DIR/.git" || {
+            echo "::error::Persistent home repository not found: $REPO_DIR"
+            exit 1
+          }
+          test -f "$REPO_DIR/ipad/HondaAnalyzer.xcodeproj/project.pbxproj" || {
+            echo "::error::Open this persistent checkout in Xcode, configure Personal Team, and run on iPad once before deployment."
+            exit 1
+          }
+          if [[ -n "$(git -C "$REPO_DIR" status --porcelain -uno)" ]]; then
+            echo "::error::Local tracked changes exist; refusing to overwrite the home Mac repo."
+            exit 1
+          fi
+          git -C "$REPO_DIR" fetch origin "$SOURCE_REF"
+          if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$SOURCE_REF"; then
+            git -C "$REPO_DIR" switch "$SOURCE_REF"
+          else
+            git -C "$REPO_DIR" switch --track -c "$SOURCE_REF" "origin/$SOURCE_REF"
+          fi
+          git -C "$REPO_DIR" merge --ff-only "origin/$SOURCE_REF"
+          test "$(git -C "$REPO_DIR" rev-parse HEAD)" = "$(git -C "$REPO_DIR" rev-parse "origin/$SOURCE_REF")" || {
+            echo "::error::Local branch is divergent; resolve manually first."
+            exit 1
+          }
+          echo "HONDA_REPO_DIR=$REPO_DIR" >> "$GITHUB_ENV"
 
       - name: Verify native macOS tools
         shell: bash
         run: |
           set -euo pipefail
-          bash -n ipad/Scripts/install_wifi.sh
+          bash -n "$HONDA_REPO_DIR/ipad/Scripts/install_wifi.sh"
           xcodebuild -version
           # Device identities are intentionally not printed into Actions logs.
           # The install script checks the selected device privately.
 
       - name: Run Swift core tests
         if: inputs.run_core_tests
-        working-directory: ipad
         shell: bash
-        run: swift test
+        run: cd "$HONDA_REPO_DIR/ipad" && swift test
 
       - name: Build, sign and install over Wi-Fi
         shell: bash
         env:
           HONDA_IPAD_DEVICE_ID: ${{ secrets.HONDA_IPAD_DEVICE_ID }}
           HONDA_APPLE_TEAM_ID: ${{ vars.HONDA_APPLE_TEAM_ID }}
-        run: bash ipad/Scripts/install_wifi.sh
+        run: bash "$HONDA_REPO_DIR/ipad/Scripts/install_wifi.sh"
 
       - name: Summarize deployment
         if: success()
