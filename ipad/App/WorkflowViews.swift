@@ -338,7 +338,8 @@ struct OperationModeCards: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!ready || model.isDriveCollecting || model.isDidScanning || model.isBusy)
+                            .disabled(!ready || model.isDriveCollecting || model.isDidScanning ||
+                                      model.isUnifiedCollecting || model.isBusy)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
