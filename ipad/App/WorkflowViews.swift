@@ -58,7 +58,8 @@ struct SessionWorkflowPanel: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .disabled(model.isBusy || model.isDidScanning || model.isDriveCollecting || model.isLivePolling)
+                        .disabled(model.isBusy || model.isDidScanning || model.isDriveCollecting ||
+                                  (model.isLivePolling && nextActionButtonTitle != "表示を停止"))
                     }
                 }
             }
