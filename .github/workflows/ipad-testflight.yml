@@ -37,13 +37,13 @@ jobs:
       - name: Check credentials and version
         shell: bash
         env:
-          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
-          ISSUER_ID: \${{ vars.APPSTORE_ISSUER_ID }}
-          API_KEY_ID: \${{ vars.APPSTORE_API_KEY_ID }}
-          API_KEY: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
-          CERT_P12: \${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
-          CERT_PASSWORD: \${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
-          RELEASE_VERSION: \${{ inputs.app_version }}
+          TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
+          ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          API_KEY_ID: ${{ vars.APPSTORE_API_KEY_ID }}
+          API_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          CERT_P12: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+          RELEASE_VERSION: ${{ inputs.app_version }}
         run: |
           set -euo pipefail
           if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -59,7 +59,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: \${{ inputs.source_ref }}
+          ref: ${{ inputs.source_ref }}
           persist-credentials: false
 
       - name: Verify Xcode
@@ -86,8 +86,8 @@ jobs:
       - name: Import Apple Distribution signing identity
         uses: Apple-Actions/import-codesign-certs@v7
         with:
-          p12-file-base64: \${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
-          p12-password: \${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
 
       - name: Install App Store provisioning profile
         id: profiles
@@ -95,15 +95,15 @@ jobs:
         with:
           bundle-id: com.papataku.HondaAnalyzer
           profile-type: IOS_APP_STORE
-          issuer-id: \${{ vars.APPSTORE_ISSUER_ID }}
-          api-key-id: \${{ vars.APPSTORE_API_KEY_ID }}
-          api-private-key: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
 
       - name: Validate installed App Store profile
         shell: bash
         env:
-          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
-          PROFILES: \${{ steps.profiles.outputs.profiles }}
+          TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
+          PROFILES: ${{ steps.profiles.outputs.profiles }}
         run: |
           set -euo pipefail
           PROFILE_NAME="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .name' <<< "$PROFILES")"
@@ -123,8 +123,8 @@ jobs:
         shell: bash
         working-directory: ipad
         env:
-          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
-          RELEASE_VERSION: \${{ inputs.app_version }}
+          TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
+          RELEASE_VERSION: ${{ inputs.app_version }}
         run: |
           set -euo pipefail
           xcodebuild -project HondaAnalyzer.xcodeproj \
@@ -142,7 +142,7 @@ jobs:
       - name: Export TestFlight IPA
         shell: bash
         env:
-          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
+          TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
@@ -169,18 +169,18 @@ jobs:
       - name: Upload to App Store Connect TestFlight
         uses: Apple-Actions/upload-testflight-build@v5
         with:
-          app-path: \${{ runner.temp }}/HondaAnalyzer-export/HondaAnalyzer.ipa
-          issuer-id: \${{ vars.APPSTORE_ISSUER_ID }}
-          api-key-id: \${{ vars.APPSTORE_API_KEY_ID }}
-          api-private-key: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          app-path: ${{ runner.temp }}/HondaAnalyzer-export/HondaAnalyzer.ipa
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
           wait-for-processing: "true"
 
       - name: Display deployment summary
         if: success()
         shell: bash
         env:
-          SOURCE_REF: \${{ inputs.source_ref }}
-          RELEASE_VERSION: \${{ inputs.app_version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_VERSION: ${{ inputs.app_version }}
         run: |
           echo "### TestFlight build uploaded" >> "$GITHUB_STEP_SUMMARY"
           echo "Source: $SOURCE_REF" >> "$GITHUB_STEP_SUMMARY"
