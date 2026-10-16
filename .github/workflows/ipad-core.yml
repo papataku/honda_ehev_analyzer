@@ -30,6 +30,9 @@ jobs:
         working-directory: ipad
         run: swift --version
 
+      - name: Validate home Wi-Fi deploy script
+        run: bash -n ipad/Scripts/install_wifi.sh
+
       - name: Build and test HondaAnalyzerCore
         working-directory: ipad
         run: swift test
