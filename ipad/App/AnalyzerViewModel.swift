@@ -402,6 +402,286 @@ final class AnalyzerViewModel: ObservableObject {
         )
     }
 
+
+    /// One operator action starts all read-only data collection on one
+    /// serialized ELM lane. The fixed baseline always has first priority.
+    /// Zero speed means "stationary by speed", never a verified P gear.
+    func startUnifiedCollection() {
+        guard isRecording, elmInitialized, knownSignalsValidated,
+              ble.state == "ready", !isBusy, !isUnifiedCollecting,
+              !isLivePolling, !isDriveCollecting, !isDidScanning,
+              !isStandardPIDSurveying,
+              let store = captureStore, let sid = captureSessionID else {
+            statusMessage = "接続・記録・通信初期化・既知信号確認を完了してください"
+            return
+        }
+        isUnifiedCollecting = true
+        unifiedUnknownProbes = 0
+        unifiedStandardProbes = 0
+        unifiedStage = "ライブ監視を開始しました"
+        store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_START",
+                       note: "Mode01 and verified-DID while driving; unknown-22 only stable-zero >=5s")
+        refreshDriveCandidates()
+        unifiedTask = Task { [weak self] in
+            guard let self else { return }
+            var gate = AutomaticZeroSpeedGate()
+            var planner = UnifiedAcquisitionPlanner()
+            var bitmapQueue: [UInt8] = [0]
+            var seenBitmaps: Set<UInt8> = []
+            var pidQueue: [UInt8] = []
+            var seenPIDs: Set<UInt8> = []
+            var didQueue: [String: [UInt16]] = [:]
+            var turn = 0
+            var nextResponder = 0
+            var consecutiveBaselineErrors = 0
+            do {
+                while !Task.isCancelled {
+                    try Task.checkCancellation()
+                    guard ble.state == "ready", elmInitialized,
+                          isRecording else { break }
+                    let started = Date()
+                    // One active command at a time, never competing Tasks.
+                    do {
+                        try await prepareMode01()
+                        try await pollKnownCycle()
+                        consecutiveBaselineErrors = 0
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        gate.reset(reason: "基本信号の取得エラー")
+                        consecutiveBaselineErrors += 1
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_LIVE_ERROR",
+                                       note: error.localizedDescription)
+                        if consecutiveBaselineErrors >= 3 { throw error }
+                        continue
+                    }
+                    gate.observe(speedKmh: speedKmh.map(Double.init), at: Date())
+                    unifiedZeroSeconds = gate.firstZeroAt.map {
+                        Date().timeIntervalSince($0)
+                    } ?? 0
+                    let moving = (speedKmh ?? 0) > 0
+                    let stableZero = gate.canProbe(at: Date())
+                    unifiedStage = moving
+                        ? "走行中：ライブ・既知DID・標準PID取得"
+                        : stableZero
+                            ? "車速0を5秒以上確認：停止時の未知DID探索"
+                            : "ライブ取得中：車速0の安定を確認中"
+                    turn += 1
+
+                    // ECU discovery only uses previously validated read-only
+                    // requests. Each read is guarded by a new speed sample.
+                    if stableZero && observedEcus.isEmpty {
+                        var found: [String: EcuResponder] = [:]
+                        for req in safeEcuCensusRequests {
+                            try Task.checkCancellation()
+                            guard let speed = try? await readScanSpeed(),
+                                  speed <= 0.1 else {
+                                gate.reset(reason: "ECU確認時の車速不明")
+                                break
+                            }
+                            gate.observe(speedKmh: speed, at: Date())
+                            guard gate.canProbe(at: Date()) else { break }
+                            try await selectHeader(req.headerCommand)
+                            let result = try await session.command(req.command, timeout: 3.0)
+                            append(result)
+                            for ecu in ecuResponders(in: result.text) {
+                                found[ecu.responseCanID] = ecu
+                            }
+                        }
+                        if !found.isEmpty {
+                            observedEcus = found.values.sorted { $0.source < $1.source }
+                            didScanEcu = observedEcus[0].source
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_ECU_FOUND",
+                                           note: observedEcus.map(\.source).joined(separator: ","))
+                        }
+                    }
+                    if didQueue.isEmpty && !observedEcus.isEmpty {
+                        let priority = Array(UInt16(0x2000)...UInt16(0x20FF)) +
+                                       Array(UInt16(0x2200)...UInt16(0x22FF)) +
+                                       Array(UInt16(0x2600)...UInt16(0x26FF))
+                        for ecu in observedEcus {
+                            let old = loadDidScanHistory(
+                                from: captureDatabaseURLs(), ecu: ecu.source,
+                                start: 0x2000, end: 0x26FF
+                            ).completed
+                            didQueue[ecu.source] = priority.filter { !old.contains($0) }
+                        }
+                    }
+                    let unknownAvailable = didQueue.values.contains { !$0.isEmpty }
+                    let action = planner.next(
+                        isMoving: moving, zeroSpeedAuthorized: stableZero,
+                        hasBitmap: !bitmapQueue.isEmpty,
+                        hasStandardPID: !pidQueue.isEmpty,
+                        hasKnownDID: !driveCandidates.isEmpty,
+                        hasUnknownDID: unknownAvailable
+                    )
+
+                    // Background errors must never silence the baseline.
+                    do {
+                        switch action {
+                        case .supportedPIDBitmap:
+                            let base = bitmapQueue.removeFirst()
+                            if seenBitmaps.insert(base).inserted {
+                                try await prepareMode01()
+                                let result = try await session.command(
+                                    String(format: "01%02X", base), timeout: 3)
+                                append(result)
+                                for bitmap in parseStandardPIDBitmaps(result.text, base: base) {
+                                    standardPIDInventory.addBitmap(bitmap)
+                                    for pid in bitmap.supported
+                                        where !isStandardBitmapPID(pid) &&
+                                              ![0x05, 0x0C, 0x0D, 0x5B, 0x9A].contains(pid) {
+                                        if seenPIDs.insert(pid).inserted {
+                                            pidQueue.append(pid)
+                                        }
+                                    }
+                                    if base < 0xE0,
+                                       bitmap.supported.contains(base &+ 0x20),
+                                       !seenBitmaps.contains(base &+ 0x20),
+                                       !bitmapQueue.contains(base &+ 0x20) {
+                                        bitmapQueue.append(base &+ 0x20)
+                                    }
+                                }
+                                pidQueue.sort()
+                                standardPIDProgress = "bitmap: \(seenBitmaps.count)ページ / 候補 \(pidQueue.count)件"
+                            }
+                        case .standardPID:
+                            let pid = pidQueue.removeFirst()
+                            try await prepareMode01()
+                            let result = try await session.command(
+                                String(format: "01%02X", pid), timeout: 3)
+                            append(result)
+                            let readings = readStandardPID(
+                                pid, from: result.text, at: Date(),
+                                latencyMs: result.latencyMs
+                            )
+                            if readings.isEmpty {
+                                standardPIDInventory.addFailure(pid: pid, status: .noData)
+                            }
+                            for reading in readings {
+                                standardPIDInventory.addReading(reading)
+                                saveStandardPIDReading(reading)
+                                trackStandardReading(reading)
+                            }
+                            unifiedStandardProbes += 1
+                        case .knownDrivingDID:
+                            if let candidate = schedulerFor(driveCandidates).next(
+                                now: Date(), context: drivingContext
+                            ) {
+                                let outcome = await sampleKnownDrivingDID(candidate)
+                                _ = recordAdaptiveDriveSample(
+                                    candidate, outcome: outcome,
+                                    scheduler: schedulerFor(driveCandidates),
+                                    store: store, sessionID: sid
+                                )
+                                if outcome.status == .positive {
+                                    signalChangeTracker.observeDID(
+                                        ecu: candidate.ecu, did: candidate.did,
+                                        payload: outcome.payload, at: Date()
+                                    )
+                                }
+                            }
+                        case .stationaryUnknownDID:
+                            let sources = observedEcus.map(\.source)
+                            if !sources.isEmpty {
+                                nextResponder %= sources.count
+                                var selection: (source: String, did: UInt16)?
+                                for offset in 0..<sources.count {
+                                    let name = sources[(nextResponder + offset) % sources.count]
+                                    if var remaining = didQueue[name], !remaining.isEmpty {
+                                        selection = (name, remaining.removeFirst())
+                                        didQueue[name] = remaining
+                                        nextResponder = (nextResponder + offset + 1) % sources.count
+                                        break
+                                    }
+                                }
+                                if let item = selection {
+                                    let checkedSpeed = try? await readScanSpeed()
+                                    if let checkedSpeed, checkedSpeed <= 0.1 {
+                                        gate.observe(speedKmh: checkedSpeed, at: Date())
+                                    } else {
+                                        gate.reset(reason: "未知DID直前の車速不明・走行検出")
+                                    }
+                                    if gate.canProbe(at: Date()), !Task.isCancelled,
+                                       let header = physicalRequestHeaderCommand(for: item.source) {
+                                        try await selectHeader(header)
+                                        let cmd = String(format: "22%04X", item.did)
+                                        let result = try await session.command(cmd, timeout: 2.5)
+                                        append(result)
+                                        let outcome = classifyUDS22Text(
+                                            result.text, ecu: item.source, did: item.did,
+                                            latencyMs: result.latencyMs
+                                        )
+                                        store.saveDidScan(sessionID: sid, at: Date(), outcome: outcome)
+                                        didScanCurrent = "ECU \(item.source) / \(cmd) / \(outcome.status.rawValue)"
+                                        unifiedUnknownProbes += 1
+                                        if outcome.status == .positive ||
+                                            outcome.status == .positivePartial {
+                                            refreshPositiveDids(flush: true)
+                                            refreshDriveCandidates()
+                                        }
+                                    } else {
+                                        didQueue[item.source, default: []].insert(item.did, at: 0)
+                                    }
+                                }
+                            }
+                        case .baseline, .idle:
+                            break
+                        }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_BACKGROUND_ERROR",
+                                       note: "action=\(action.rawValue) \(error.localizedDescription)")
+                        // Fail closed for unknown DID. Do not retry the same
+                        // unknown request without another stable-zero check.
+                    }
+
+                    changingSignals = signalChangeTracker.changingSignals()
+                    if turn.isMultiple(of: 10) {
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_HEARTBEAT",
+                                       note: "cycle=\(turn) pid=\(unifiedStandardProbes) did=\(unifiedUnknownProbes)")
+                    }
+                    let delay = pollingDelaySeconds(
+                        requestCount: 5,
+                        targetRequestRateHz: max(1, livePollingRequestRateHz),
+                        elapsedSeconds: Date().timeIntervalSince(started),
+                        unthrottled: false
+                    )
+                    if delay > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                unifiedStage = "通信エラー：統合収集を停止"
+                statusMessage = "統合収集を停止：\(error.localizedDescription)"
+                store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_FATAL_ERROR",
+                               note: error.localizedDescription)
+            }
+            store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_STOP",
+                           note: "standard=\(unifiedStandardProbes) unknown=\(unifiedUnknownProbes)")
+            store.saveDriveSamplingState(
+                sessionID: sid, at: Date(),
+                seeds: driveScheduler?.snapshots() ?? []
+            )
+            store.flush()
+            try? writeStandardPIDExports()
+            isUnifiedCollecting = false
+            unifiedTask = nil
+            if !unifiedStage.contains("エラー") && !unifiedStage.contains("BLE中断") {
+                unifiedStage = "統合収集を停止しました。SQLite記録を終了して共有できます"
+            }
+        }
+    }
+
+    func stopUnifiedCollection() {
+        unifiedTask?.cancel()
+        unifiedStage = "停止処理中：通信の応答後に保存します"
+    }
+
     func startLivePolling() {
         guard ble.state == "ready", elmInitialized, knownSignalsValidated,
               !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting,
