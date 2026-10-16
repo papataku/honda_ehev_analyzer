@@ -245,16 +245,21 @@ final class AnalyzerViewModel: ObservableObject {
                     var readings: [StandardPIDReading] = []
                     for attempt in 0..<2 {
                         try Task.checkCancellation()
+                        var failureStatus: StandardPIDSampleStatus = .noData
                         do {
                             let response = try await session.command(cmd, timeout: 4)
                             append(response)
                             readings = readStandardPID(pid, from: response.text, at: Date(),
                                                        latencyMs: response.latencyMs)
                         } catch {
+                            failureStatus = .timeout
                             recordLifecycleEvent(kind: "PID_RETRY",
                                                  note: "pid=\(cmd) attempt=\(attempt+1) error=\(error)")
                         }
                         if !readings.isEmpty { break }
+                        inventory.addFailure(pid: pid, status: failureStatus)
+                        recordLifecycleEvent(kind: "PID_ATTEMPT_FAILURE",
+                                             note: "pid=\(cmd) status=\(failureStatus.rawValue) attempt=\(attempt+1)")
                         if attempt == 0 { try await Task.sleep(nanoseconds: 300_000_000) }
                     }
                     for reading in readings {
@@ -427,6 +432,7 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopLivePolling() {
+        try? writeStandardPIDExports()
         liveTask?.cancel()
         liveTask = nil
         isLivePolling = false
