@@ -77,6 +77,29 @@ final class StandardPIDInventoryTests: XCTestCase {
         XCTAssertTrue(standardPIDCSV(decoded).contains("010D@18DAF101"))
     }
 
+    func testIncompleteISOTPIsPartialNotDecodedOrFabricated() {
+        // First frame declares 8 payload bytes but only carries six; CF is absent.
+        let broken = "18DAF1011008410C00100000\r>"
+        let rows = readStandardPID(0x0C, from: broken)
+        XCTAssertEqual(rows.first?.status, .partialResponse)
+        XCTAssertNil(rows.first?.value)
+        XCTAssertEqual(rows.first?.payloadHex, "00100000")
+    }
+
+    func testNoDataRemainsRetryableAndResponderBound() {
+        var inventory = StandardPIDInventory()
+        inventory.addBitmap(parseStandardPIDBitmaps("18DAF10106410010000000\r>", base: 0)[0])
+        inventory.addFailure(pid: 0x04, status: .noData)
+        XCTAssertEqual(inventory.sortedRows.count, 1)
+        XCTAssertEqual(inventory.sortedRows[0].latestStatus, .noData)
+        XCTAssertEqual(inventory.sortedRows[0].attempts, 1)
+        XCTAssertEqual(inventory.sortedRows[0].successfulSamples, 0)
+        XCTAssertEqual(inventory.sortedRows[0].responseCANID, "18DAF101")
+        inventory.addReading(readStandardPID(0x04, from: "18DAF10103410400\r>")[0])
+        XCTAssertEqual(inventory.sortedRows[0].latestStatus, .decoded)
+        XCTAssertEqual(inventory.sortedRows[0].latestValue, 0)
+    }
+
     func testHybrid9ADoesNotSilentlyClaimSingleFieldDecode() {
         // 019A is one PID with multiple derived values, not three extra PID reads.
         XCTAssertEqual(standardPIDCatalog[0x9A]?.bytes, 6)
