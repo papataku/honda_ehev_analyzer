@@ -25,7 +25,12 @@ Mac/iPad上で行ってください。
   Wi-Fi上でiPadが見えないときはVPN/ゲストネットワーク/端末間分離を確認。
 - Xcodeでプロジェクトを一度開き、Signing & Capabilities →
   **Automatically manage signing** をON、TeamをPersonal Teamにする。
-  初回の実機ビルド/署名でXcodeによるデバイス登録・認証が求められる場合があります。
+  **初回はXcodeのRun Destinationで対象iPadを選び、実機Runを1回完了**させて、
+  Personal Teamの開発用プロファイルにそのiPadを登録してください。
+  端末登録や開発者アカウントの承認などをXcodeが要求したらMac上で許可します。
+  以後のスクリプトは`generic/platform=iOS`で署名ビルドし、
+  `devicectl`のデバイスIDを用いてインストールするため、
+  `xcodebuild`が期待するUDIDとCoreDevice識別子の違いに影響されません。
   このリポジトリのTeam設定はコミットしなくて構いません。
 - iPadで「未信頼のデベロッパ」等の警告が出たときは
   iPad Settings → General → VPN & Device Management で開発者を信頼。
