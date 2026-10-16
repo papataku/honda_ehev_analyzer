@@ -189,6 +189,18 @@ public struct StandardPIDInventory {
         }
     }
 
+    /// A failed request has no trustworthy responding CAN ID. Charge it to the
+    /// ECUs that previously advertised support, without fabricating a new responder.
+    public mutating func addFailure(pid: UInt8, status: StandardPIDSampleStatus) {
+        guard status == .noData || status == .timeout else { return }
+        for key in rows.keys {
+            guard var row = rows[key], row.pid == pid else { continue }
+            row.attempts += 1
+            row.latestStatus = status
+            rows[key] = row
+        }
+    }
+
     public mutating func addReading(_ reading: StandardPIDReading) {
         let id = Self.identifier(pid: reading.pid, canID: reading.responseCANID)
         var row = rows[id] ?? Self.empty(pid: reading.pid, canID: reading.responseCANID)
