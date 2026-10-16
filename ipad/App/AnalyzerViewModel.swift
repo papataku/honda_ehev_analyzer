@@ -26,6 +26,14 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var latestPIDCSVURL: URL?
     @Published var latestPIDJSONURL: URL?
     private var standardPIDTask: Task<Void, Never>?
+    private var unifiedTask: Task<Void, Never>?
+    private var signalChangeTracker = SignalChangeTracker()
+    @Published var changingSignals: [ObservedSignalTrend] = []
+    @Published var isUnifiedCollecting = false
+    @Published var unifiedStage = "未開始"
+    @Published var unifiedUnknownProbes = 0
+    @Published var unifiedStandardProbes = 0
+    @Published var unifiedZeroSeconds = 0.0
 
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
     @Published var elmInitialized = false
@@ -85,6 +93,13 @@ final class AnalyzerViewModel: ObservableObject {
         }
         bleStateObservation = transport.$state.sink { [weak self] state in
             guard let self else { return }
+            if self.isUnifiedCollecting &&
+               (state == "disconnected" || state == "connect-failed" ||
+                state == "gatt-error" || state == "bluetooth-unavailable") {
+                self.unifiedTask?.cancel()
+                self.unifiedStage = "BLE中断：統合収集を停止しました"
+                self.recordLifecycleEvent(kind: "UNIFIED_LINK_LOST", note: "state=\(state)")
+            }
             if state == "connecting" || state == "disconnected" ||
                 state == "connect-failed" || state == "gatt-error" ||
                 state == "bluetooth-unavailable" {
@@ -101,7 +116,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startRecording() {
-        guard captureStore == nil, !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy else { return }
+        guard captureStore == nil, !isDidScanning, !isLivePolling, !isDriveCollecting,
+              !isUnifiedCollecting, !isBusy else { return }
         do {
             let documents = try FileManager.default.url(
                 for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -132,6 +148,11 @@ final class AnalyzerViewModel: ObservableObject {
             stationaryConfirmed = false
             observedEcus = []
             liveSamples.removeAll()
+            signalChangeTracker = SignalChangeTracker()
+            changingSignals = []
+            unifiedStage = "未開始"
+            unifiedUnknownProbes = 0
+            unifiedStandardProbes = 0
             standardPIDInventory = StandardPIDInventory()
             latestPIDCSVURL = nil
             latestPIDJSONURL = nil
@@ -149,8 +170,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopRecording() {
-        guard !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy,
-              let store = captureStore, let sid = captureSessionID else { return }
+        guard !isDidScanning, !isLivePolling, !isDriveCollecting,
+              !isUnifiedCollecting, !isBusy, let store = captureStore, let sid = captureSessionID else { return }
         do {
             try store.closeSession(sid)
             store.flush()
@@ -187,7 +208,8 @@ final class AnalyzerViewModel: ObservableObject {
     /// written as structured evidence events for offline reconstruction.
     func startStandardPIDSurvey() {
         guard isRecording, ble.state == "ready", elmInitialized, knownSignalsValidated,
-              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else {
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting,
+              !isUnifiedCollecting else {
             statusMessage = "標準PID調査にはBLE接続・記録・初期化・既知信号確認が必要です"
             return
         }
@@ -369,9 +391,21 @@ final class AnalyzerViewModel: ObservableObject {
         }
     }
 
+    private func trackStandardReading(_ reading: StandardPIDReading) {
+        guard reading.status == .decoded || reading.status == .uninterpreted else { return }
+        signalChangeTracker.observePID(
+            pid: reading.pid, canID: reading.responseCANID,
+            value: reading.value, payload: Data(reading.payloadHex.utf8),
+            unit: reading.unit ?? "",
+            name: standardPIDCatalog[reading.pid]?.name ?? String(format: "PID %02X", reading.pid),
+            at: reading.timestamp
+        )
+    }
+
     func startLivePolling() {
         guard ble.state == "ready", elmInitialized, knownSignalsValidated,
-              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else {
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting,
+              !isUnifiedCollecting else {
             statusMessage = "BLE接続・ELM初期化・既知信号確認を完了してください"
             return
         }
@@ -529,7 +563,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     private func startDidScan(start: UInt16, end: UInt16, adaptive: Bool) {
-        guard !isBusy, !isLivePolling, !isDriveCollecting, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDriveCollecting,
+              !isDidScanning, !isUnifiedCollecting else { return }
         guard stationaryConfirmed else {
             statusMessage = "DID探索前に完全停止・Pレンジ確認をチェックしてください"
             return
@@ -983,7 +1018,7 @@ final class AnalyzerViewModel: ObservableObject {
     /// Adaptive scheduling moves stable payloads to sparse rechecks (never bans them).
     func startDriveCollection() {
         guard !isBusy, !isDidScanning, !isLivePolling, !isDriveCollecting,
-              ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
+              !isUnifiedCollecting, ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
               let store = captureStore, let sid = captureSessionID else {
             statusMessage = "BLE・記録・ELM・既知信号を準備してから走行解析を開始してください"
             return
@@ -1420,6 +1455,14 @@ final class AnalyzerViewModel: ObservableObject {
             }
         }
 
+        // These readings also feed the bounded automatic change-graph cache.
+        // The existing live metrics still use their original decoders.
+        let knownPIDs: [UInt8] = [0x0C, 0x0D, 0x05, 0x5B]
+        for (index, pid) in knownPIDs.enumerated() {
+            for reading in readStandardPID(pid, from: texts[index], at: Date()) {
+                trackStandardReading(reading)
+            }
+        }
         let rpmValue = decodeEngineRPM(texts[0])
         let speedValue = decodeVehicleSpeed(texts[1])
         let coolantValue = decodeCoolantC(texts[2])
