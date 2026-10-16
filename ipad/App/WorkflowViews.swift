@@ -287,7 +287,7 @@ struct OperationModeCards: View {
                             .foregroundStyle(.secondary)
                         if model.isLivePolling {
                             StatusPill(text: "表示中", systemImage: "waveform.path.ecg", style: .good)
-                            Text(String(format: "目標 %.0f / 実効 %.1f req/s", model.livePollingRequestRateHz, model.liveEffectiveRequestRateHz))
+                            Text(String(format: "ELM %.1f req/s ・ PID %.1f 件/s ・ 一括 %d 件", model.liveEffectiveRequestRateHz, model.liveEffectivePIDRateHz, model.liveLastBatchSize))
                                 .font(.caption.monospacedDigit())
                             Button("表示を停止", role: .destructive) {
                                 model.stopLivePolling()
