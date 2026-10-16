@@ -49,7 +49,7 @@ IPAD_DIR="$ROOT/ipad"
 [[ -f "$IPAD_DIR/project.yml" ]] || die "ipad/project.yml is missing."
 
 DEVICES="$(xcrun devicectl list devices)" || die "Device Hub unavailable; pair your iPad in Xcode."
-printf '%s\n' "$DEVICES"
+# Do NOT print all device names and identifiers into public GitHub Actions logs.
 printf '%s\n' "$DEVICES" | grep -Fq -- "$DEVICE_ID" ||
   die "iPad not listed. Pair with this Mac in Xcode Device Hub (same Wi-Fi)."
 
