@@ -19,6 +19,14 @@ final class AnalyzerViewModel: ObservableObject {
     private var bleStateObservation: AnyCancellable?
 
     @Published var isBusy = false
+    @Published var standardPIDInventory = StandardPIDInventory()
+    @Published var isStandardPIDSurveying = false
+    @Published var standardPIDProgress = "未調査"
+    @Published var selectedExtraPIDs: Set<UInt8> = []
+    @Published var latestPIDCSVURL: URL?
+    @Published var latestPIDJSONURL: URL?
+    private var standardPIDTask: Task<Void, Never>?
+
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
     @Published var elmInitialized = false
     @Published var knownSignalsValidated = false
@@ -122,6 +130,10 @@ final class AnalyzerViewModel: ObservableObject {
             stationaryConfirmed = false
             observedEcus = []
             liveSamples.removeAll()
+            standardPIDInventory = StandardPIDInventory()
+            latestPIDCSVURL = nil
+            latestPIDJSONURL = nil
+            standardPIDProgress = "未調査"
             statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
             refreshDriveCandidates()
@@ -147,6 +159,152 @@ final class AnalyzerViewModel: ObservableObject {
         captureStore = nil
         captureSessionID = nil
         isRecording = false
+        // Finalized sidecars are derived from the same in-memory survey rows and
+        // raw commands already flushed to the matching session SQLite.
+        try? writeStandardPIDExports()
+    }
+
+    /// Low-volume forensic markers for screen-lock state, app lifecycle and BLE changes.
+    func recordLifecycleEvent(kind: String, note: String) {
+        guard let store = captureStore, let sid = captureSessionID else { return }
+        store.addEvent(sessionID: sid, at: Date(), kind: kind, note: note)
+    }
+
+    func toggleExtraPID(_ pid: UInt8) {
+        guard !isLivePolling, !isBusy, !isStandardPIDSurveying else { return }
+        if selectedExtraPIDs.contains(pid) {
+            selectedExtraPIDs.remove(pid)
+        } else if selectedExtraPIDs.count < 4, !isStandardBitmapPID(pid),
+                  ![0x0C, 0x0D, 0x05, 0x5B, 0x9A].contains(pid) {
+            selectedExtraPIDs.insert(pid)
+        }
+    }
+
+    /// Read-only Mode 01 survey. This is mutually exclusive with live/drive/DID jobs.
+    /// Raw notifications and commands remain in SQLite; per-responder results are also
+    /// written as structured evidence events for offline reconstruction.
+    func startStandardPIDSurvey() {
+        guard isRecording, ble.state == "ready", elmInitialized, knownSignalsValidated,
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else {
+            statusMessage = "標準PID調査にはBLE接続・記録・初期化・既知信号確認が必要です"
+            return
+        }
+        isBusy = true
+        isStandardPIDSurveying = true
+        standardPIDProgress = "対応PIDビットマップを確認中"
+        statusMessage = "標準PID調査中（安全な読取専用Mode 01）"
+
+        standardPIDTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await prepareMode01()
+                var inventory = StandardPIDInventory()
+                var nextBases: [UInt8] = [0x00]
+                var visited: Set<UInt8> = []
+                var allPIDs: Set<UInt8> = []
+                while !nextBases.isEmpty {
+                    try Task.checkCancellation()
+                    let base = nextBases.removeFirst()
+                    guard visited.insert(base).inserted else { continue }
+                    let cmd = String(format: "01%02X", base)
+                    var bitmaps: [StandardPIDBitmap] = []
+                    for attempt in 0..<3 {
+                        try Task.checkCancellation()
+                        do {
+                            let reply = try await session.command(cmd, timeout: 4)
+                            append(reply)
+                            bitmaps = parseStandardPIDBitmaps(reply.text, base: base)
+                        } catch {
+                            recordLifecycleEvent(kind: "PID_BITMAP_RETRY",
+                                                 note: "pid=\(cmd) attempt=\(attempt+1) error=\(error)")
+                        }
+                        if !bitmaps.isEmpty { break }
+                        if attempt < 2 { try await Task.sleep(nanoseconds: 250_000_000) }
+                    }
+                    for bitmap in bitmaps {
+                        inventory.addBitmap(bitmap)
+                        allPIDs.formUnion(bitmap.supported.filter { !isStandardBitmapPID($0) })
+                        recordLifecycleEvent(
+                            kind: "PID_BITMAP",
+                            note: String(format: "base=%02X can=%@ mask=%08X",
+                                         base, bitmap.canID ?? "unknown", bitmap.mask)
+                        )
+                        if Int(base) < 0xE0 && bitmap.supported.contains(base &+ 0x20) {
+                            nextBases.append(base &+ 0x20)
+                        }
+                    }
+                    standardPIDInventory = inventory
+                    standardPIDProgress = "対応範囲 \(visited.count)件 / 候補 \(allPIDs.count)件"
+                }
+                let orderedPIDs = allPIDs.sorted()
+                recordLifecycleEvent(kind: "PID_SURVEY_PLAN",
+                                     note: "mode=01 read_only pids=\(orderedPIDs.map { String(format:"%02X",$0) }.joined(separator:","))")
+                for (index, pid) in orderedPIDs.enumerated() {
+                    try Task.checkCancellation()
+                    let cmd = String(format: "01%02X", pid)
+                    var readings: [StandardPIDReading] = []
+                    for attempt in 0..<2 {
+                        try Task.checkCancellation()
+                        do {
+                            let response = try await session.command(cmd, timeout: 4)
+                            append(response)
+                            readings = readStandardPID(pid, from: response.text, at: Date(),
+                                                       latencyMs: response.latencyMs)
+                        } catch {
+                            recordLifecycleEvent(kind: "PID_RETRY",
+                                                 note: "pid=\(cmd) attempt=\(attempt+1) error=\(error)")
+                        }
+                        if !readings.isEmpty { break }
+                        if attempt == 0 { try await Task.sleep(nanoseconds: 300_000_000) }
+                    }
+                    for reading in readings {
+                        inventory.addReading(reading)
+                        saveStandardPIDReading(reading)
+                    }
+                    if readings.isEmpty {
+                        recordLifecycleEvent(kind: "PID_NO_RESPONSE", note: "pid=\(cmd) retryable=true")
+                    }
+                    standardPIDInventory = inventory
+                    standardPIDProgress = "実応答 \(index+1)/\(orderedPIDs.count) PID"
+                    if (index+1) % 8 == 0 {
+                        try await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                }
+                try writeStandardPIDExports()
+                standardPIDProgress = "調査完了：\(inventory.sortedRows.count)件（ECU別）"
+                statusMessage = "標準PID調査完了。候補を確認しCSV/JSONを共有できます"
+            } catch is CancellationError {
+                standardPIDProgress = "中断（再調査可能）"
+                statusMessage = "標準PID調査を中断しました"
+            } catch {
+                standardPIDProgress = "調査失敗：\(error.localizedDescription)"
+                statusMessage = standardPIDProgress
+            }
+            isStandardPIDSurveying = false
+            isBusy = false
+            standardPIDTask = nil
+        }
+    }
+
+    func stopStandardPIDSurvey() { standardPIDTask?.cancel() }
+
+    private func saveStandardPIDReading(_ reading: StandardPIDReading) {
+        recordLifecycleEvent(kind: "PID_SAMPLE",
+             note: "id=\(reading.identifier) status=\(reading.status.rawValue) payload=\(reading.payloadHex) " +
+                   "value=\(reading.value.map { String($0) } ?? "null") " +
+                   "latency_ms=\(reading.latencyMs.map { String($0) } ?? "unknown")")
+    }
+
+    private func writeStandardPIDExports() throws {
+        guard let sessionURL = recordingURL else { return }
+        let stem = sessionURL.deletingPathExtension().lastPathComponent
+        let directory = sessionURL.deletingLastPathComponent()
+        let csvURL = directory.appendingPathComponent(stem + "-pid-candidates.csv")
+        let jsonURL = directory.appendingPathComponent(stem + "-pid-candidates.json")
+        try standardPIDCSV(standardPIDInventory.sortedRows).write(to: csvURL, atomically: true, encoding: .utf8)
+        try standardPIDJSON(standardPIDInventory.sortedRows).write(to: jsonURL, options: .atomic)
+        latestPIDCSVURL = csvURL
+        latestPIDJSONURL = jsonURL
     }
 
     func addMarker(_ kind: String) {
@@ -241,7 +399,7 @@ final class AnalyzerViewModel: ObservableObject {
 
                     let elapsed = Date().timeIntervalSince(cycleStarted)
                     let delay = pollingDelaySeconds(
-                        requestCount: 5,
+                        requestCount: 5 + selectedExtraPIDs.count,
                         targetRequestRateHz: targetRate,
                         elapsedSeconds: elapsed,
                         unthrottled: unthrottled
@@ -256,7 +414,7 @@ final class AnalyzerViewModel: ObservableObject {
                         0.001,
                         Date().timeIntervalSince(cycleStarted)
                     )
-                    liveEffectiveRequestRateHz = 5.0 / cycleSeconds
+                    liveEffectiveRequestRateHz = Double(5 + selectedExtraPIDs.count) / cycleSeconds
                 }
             } catch is CancellationError {
             } catch {
@@ -1219,6 +1377,22 @@ final class AnalyzerViewModel: ObservableObject {
             }
             texts = results.map(\.text)
             successes = results.map(\.success)
+        }
+
+        // Additional standard PIDs are queried individually after the known-signal
+        // batch. The M5CAN v1.x batch protocol only guarantees the five known keys.
+        if !requireComplete {
+            for pid in selectedExtraPIDs.sorted() {
+                try Task.checkCancellation()
+                let cmd = String(format: "01%02X", pid)
+                let response = try await session.command(cmd)
+                append(response)
+                for reading in readStandardPID(pid, from: response.text, at: Date(),
+                                               latencyMs: response.latencyMs) {
+                    standardPIDInventory.addReading(reading)
+                    saveStandardPIDReading(reading)
+                }
+            }
         }
 
         let rpmValue = decodeEngineRPM(texts[0])
