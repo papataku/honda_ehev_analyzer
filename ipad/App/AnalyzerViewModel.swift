@@ -1363,8 +1363,7 @@ final class AnalyzerViewModel: ObservableObject {
             successes = texts.map(elmResponseSuccess)
             // SQLite analysis expects the five reference commands individually.
             // Keep synthetic per-item rows alongside the original batch raw
-            // command; per-item latency is unknown, so record 0 rather than
-            // incorrectly copying the entire batch RTT to each item.
+            // command. Persist NULL for unknown per-item latency, not a measured 0ms.
             for (index, key) in keys.enumerated() {
                 recordCommand(ElmCommandResult(
                     command: key,
@@ -1372,7 +1371,7 @@ final class AnalyzerViewModel: ObservableObject {
                     text: texts[index],
                     latencyMs: 0,
                     success: successes[index]
-                ))
+                ), syntheticBatchItem: true)
             }
         } else {
             var results: [ElmCommandResult] = []
@@ -1483,9 +1482,11 @@ final class AnalyzerViewModel: ObservableObject {
         )
     }
 
-    private func recordCommand(_ result: ElmCommandResult) {
+    private func recordCommand(_ result: ElmCommandResult,
+                               syntheticBatchItem: Bool = false) {
         guard let store = captureStore, let sid = captureSessionID else { return }
-        store.appendCommand(sessionID: sid, at: Date(), result: result)
+        store.appendCommand(sessionID: sid, at: Date(), result: result,
+                            syntheticBatchItem: syntheticBatchItem)
     }
 
     private func append(_ result: ElmCommandResult) {
