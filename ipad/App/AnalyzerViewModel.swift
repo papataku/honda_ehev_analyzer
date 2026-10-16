@@ -438,6 +438,7 @@ final class AnalyzerViewModel: ObservableObject {
             var turn = 0
             var nextResponder = 0
             var consecutiveBaselineErrors = 0
+            var lastCensusAt: Date = .distantPast
             do {
                 while !Task.isCancelled {
                     try Task.checkCancellation()
@@ -474,7 +475,10 @@ final class AnalyzerViewModel: ObservableObject {
 
                     // ECU discovery only uses previously validated read-only
                     // requests. Each read is guarded by a new speed sample.
-                    if stableZero && observedEcus.isEmpty {
+                    if stableZero && observedEcus.isEmpty &&
+                        Date().timeIntervalSince(lastCensusAt) >= 30 {
+                        lastCensusAt = Date()
+                        do {
                         var found: [String: EcuResponder] = [:]
                         for req in safeEcuCensusRequests {
                             try Task.checkCancellation()
@@ -498,6 +502,14 @@ final class AnalyzerViewModel: ObservableObject {
                             store.addEvent(sessionID: sid, at: Date(),
                                            kind: "UNIFIED_ECU_FOUND",
                                            note: observedEcus.map(\.source).joined(separator: ","))
+                        }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            gate.reset(reason: "ECU確認エラー")
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_ECU_ERROR",
+                                           note: error.localizedDescription)
                         }
                     }
                     if didQueue.isEmpty && !observedEcus.isEmpty {
