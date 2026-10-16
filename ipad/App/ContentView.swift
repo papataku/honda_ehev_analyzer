@@ -152,6 +152,16 @@ private struct BLEConnectionView: View {
                     }
                 }
 
+                if model.isRecording {
+                    Section("記録の状態") {
+                        Label("SQLite記録中・自動スリープ防止中", systemImage: "record.circle.fill")
+                            .foregroundStyle(.red)
+                        Text("Bluetoothが切断されても記録ファイルは保持されます。再接続後、解析画面で通信を再確認してください。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("表示フィルタ") {
                     Toggle("名前なしを除外", isOn: $hideUnnamed)
 
