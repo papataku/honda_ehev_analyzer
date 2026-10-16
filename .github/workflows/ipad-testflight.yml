@@ -1,0 +1,189 @@
+name: iPad TestFlight (manual)
+
+# This workflow must live on the default branch to support Actions → Run workflow.
+# Only manual dispatch uses Apple signing credentials; never pull_request/push.
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "App source to distribute"
+        type: choice
+        required: true
+        default: feature/ipad-standard-pid-inventory-issue12
+        options:
+          - main
+          - feature/ipad-standard-pid-inventory-issue12
+      app_version:
+        description: "Marketing version (X.Y.Z)"
+        type: string
+        required: true
+        default: "0.4.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: honda-analyzer-testflight
+  cancel-in-progress: false
+
+jobs:
+  distribute:
+    # The workflow itself must run from trusted default-branch configuration.
+    if: github.ref == 'refs/heads/main'
+    environment: testflight
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check credentials and version
+        shell: bash
+        env:
+          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
+          ISSUER_ID: \${{ vars.APPSTORE_ISSUER_ID }}
+          API_KEY_ID: \${{ vars.APPSTORE_API_KEY_ID }}
+          API_KEY: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          CERT_P12: \${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          CERT_PASSWORD: \${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+          RELEASE_VERSION: \${{ inputs.app_version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::app_version must be X.Y.Z"
+            exit 1
+          fi
+          for key in TEAM_ID ISSUER_ID API_KEY_ID API_KEY CERT_P12 CERT_PASSWORD; do
+            if [[ -z "$(printenv "$key")" ]]; then
+              echo "::error::Missing $key. See docs/IPAD_TESTFLIGHT.md."
+              exit 1
+            fi
+          done
+
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Verify Xcode
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          version="$(xcodebuild -version | awk '/^Xcode / { print $2 }')"
+          if [[ "$(echo "$version" | cut -d. -f1)" -lt 26 ]]; then
+            echo "::error::iOS TestFlight uploads must be built with Xcode 26 or newer."
+            exit 1
+          fi
+
+      - name: Regression tests
+        working-directory: ipad
+        run: swift test
+
+      - name: Generate Xcode project
+        working-directory: ipad
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen generate
+
+      - name: Import Apple Distribution signing identity
+        uses: Apple-Actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: \${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: \${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Install App Store provisioning profile
+        id: profiles
+        uses: Apple-Actions/download-provisioning-profiles@v7
+        with:
+          bundle-id: com.papataku.HondaAnalyzer
+          profile-type: IOS_APP_STORE
+          issuer-id: \${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: \${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+
+      - name: Validate installed App Store profile
+        shell: bash
+        env:
+          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
+          PROFILES: \${{ steps.profiles.outputs.profiles }}
+        run: |
+          set -euo pipefail
+          PROFILE_NAME="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .name' <<< "$PROFILES")"
+          PROFILE_UUID="$(jq -er 'map(select(.type == "IOS_APP_STORE")) | first | .uuid' <<< "$PROFILES")"
+          PROFILE_PATH="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          test -s "$PROFILE_PATH"
+          security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_TEAM="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")"
+          PROFILE_APP="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")"
+          if [[ "$PROFILE_TEAM" != "$TEAM_ID" || "$PROFILE_APP" != "$TEAM_ID.com.papataku.HondaAnalyzer" ]]; then
+            echo "::error::Provisioning profile is for another team or bundle ID."
+            exit 1
+          fi
+          echo "TF_PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+
+      - name: Archive signed iPad app
+        shell: bash
+        working-directory: ipad
+        env:
+          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
+          RELEASE_VERSION: \${{ inputs.app_version }}
+        run: |
+          set -euo pipefail
+          xcodebuild -project HondaAnalyzer.xcodeproj \
+            -scheme HondaAnalyzer -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/HondaAnalyzer.xcarchive" \
+            "DEVELOPMENT_TEAM=$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            "PROVISIONING_PROFILE_SPECIFIER=$TF_PROFILE_NAME" \
+            "MARKETING_VERSION=$RELEASE_VERSION" \
+            "CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER" \
+            archive
+
+      - name: Export TestFlight IPA
+        shell: bash
+        env:
+          TEAM_ID: \${{ vars.APPSTORE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>provisioningProfiles</key><dict>
+              <key>com.papataku.HondaAnalyzer</key><string>$TF_PROFILE_NAME</string>
+            </dict>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/HondaAnalyzer.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/HondaAnalyzer-export"
+          test -s "$RUNNER_TEMP/HondaAnalyzer-export/HondaAnalyzer.ipa"
+
+      - name: Upload to App Store Connect TestFlight
+        uses: Apple-Actions/upload-testflight-build@v5
+        with:
+          app-path: \${{ runner.temp }}/HondaAnalyzer-export/HondaAnalyzer.ipa
+          issuer-id: \${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: \${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: \${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          wait-for-processing: "true"
+
+      - name: Display deployment summary
+        if: success()
+        shell: bash
+        env:
+          SOURCE_REF: \${{ inputs.source_ref }}
+          RELEASE_VERSION: \${{ inputs.app_version }}
+        run: |
+          echo "### TestFlight build uploaded" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: $SOURCE_REF" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: $RELEASE_VERSION ($GITHUB_RUN_NUMBER)" >> "$GITHUB_STEP_SUMMARY"
+          echo "App: com.papataku.HondaAnalyzer" >> "$GITHUB_STEP_SUMMARY"
+          echo "Check your internal TestFlight group in App Store Connect." >> "$GITHUB_STEP_SUMMARY"
