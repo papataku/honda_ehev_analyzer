@@ -114,7 +114,10 @@ struct SessionWorkflowPanel: View {
         if !model.isRecording { return "セッション記録を開始" }
         if !model.elmInitialized { return "車両通信を初期化" }
         if !model.knownSignalsValidated { return "既知信号を1回確認" }
-        return "準備完了。目的に応じてモードを選択"
+        if model.isLivePolling { return "ライブ取得中。終えたら表示を停止して記録を終了" }
+        if model.isStandardPIDSurveying { return "標準PIDの対応状況と実応答を調査中" }
+        if model.isDriveCollecting { return "走行解析で収集中。安全な場所で停止して保存" }
+        return "準備完了。目的に応じて下のモードを選択"
     }
 
     private var nextActionDetail: String {
@@ -130,7 +133,10 @@ struct SessionWorkflowPanel: View {
         if !model.knownSignalsValidated {
             return "RPM・車速・水温・SOC・HV電圧/電流が読めることを確認します。"
         }
-        return "次は下の3つから目的を選んでください。モーター回転数を調べるなら「走行解析」です。"
+        if model.isLivePolling { return "SQLite記録は続いています。表示を停止したあと、ページ下部の「SQLite記録を終了」→共有へ進みます。" }
+        if model.isStandardPIDSurveying { return "この間は別の取得操作は実行できません。画面の調査状況を確認してください。" }
+        if model.isDriveCollecting { return "走行中は運転に集中してください。操作は同乗者または安全に駐車してから行ってください。" }
+        return "下から「車両データを見る」「走行解析」「未知DID探索」「標準PID調査」を選んでください。記録だけでは信号の収集は始まりません。"
     }
 
     private var nextActionSymbol: String {
@@ -146,6 +152,7 @@ struct SessionWorkflowPanel: View {
         if !model.isRecording { return "記録開始" }
         if !model.elmInitialized { return "通信初期化" }
         if !model.knownSignalsValidated { return "信号確認" }
+        if model.isLivePolling { return "表示を停止" }
         return nil
     }
 
@@ -158,6 +165,8 @@ struct SessionWorkflowPanel: View {
             model.initializeELM()
         } else if !model.knownSignalsValidated {
             model.readKnownSignals()
+        } else if model.isLivePolling {
+            model.stopLivePolling()
         }
     }
 }
@@ -246,6 +255,7 @@ struct OperationModeCards: View {
     @ObservedObject var model: AnalyzerViewModel
     let onOpenDriving: () -> Void
     let onOpenDiscovery: () -> Void
+    let onOpenStandardPID: () -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 250), spacing: 12)]
 
@@ -253,7 +263,7 @@ struct OperationModeCards: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("何をしたいですか？")
                 .font(.title2.bold())
-            Text("目的を選ぶだけで進められます。信号の意味を調べたい場合は「走行解析」、新しい信号を探したい場合は「DID探索」です。")
+            Text("SQLite記録開始だけでは信号は収集されません。以下から目的を選んでください。標準PIDを広く調べたい場合は「標準PID調査」です。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -271,7 +281,7 @@ struct OperationModeCards: View {
                         }
                         .pickerStyle(.menu)
                         .disabled(model.isLivePolling || model.livePollingUnthrottled)
-                        Text("現在の設定：\(Int(model.livePollingRequestRateHz)) req/s。5種類の値を順に読むため、5 req/sでは各値が約1秒ごとの更新目標です。")
+                        Text("設定：\(Int(model.livePollingRequestRateHz)) req/s。基本の5 PIDに加え、標準PID画面で選んだ最大4 PIDを巡回します。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if model.isLivePolling {
@@ -314,6 +324,24 @@ struct OperationModeCards: View {
                         .buttonStyle(.bordered)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                AnalyzerCard("4. 標準PIDを調べる", systemImage: "list.bullet.rectangle") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("車両が対応する標準OBD項目を調べ、取得できたデータと換算式を一覧で確認します。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("対応確認とライブ追加項目選択、CSV・JSON共有ができます。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            onOpenStandardPID()
+                        } label: {
+                            Label("標準PID調査を開く", systemImage: "arrow.right.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
 
                 AnalyzerCard("3. 未知の信号を探す", systemImage: "magnifyingglass.circle") {
