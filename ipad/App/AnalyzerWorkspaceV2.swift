@@ -717,8 +717,13 @@ private struct TechnicalPage: View {
                         LabeledContent("記録", value: model.isRecording ? "記録中" : "停止")
                         LabeledContent("DID", value: model.didScanCurrent)
                         LabeledContent(
-                            "ライブ実効レート",
+                            "実ELMコマンド",
                             value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+                        LabeledContent(
+                            "実PID要求",
+                            value: String(format: "%.1f PID/s（バッチ %d件）",
+                                          model.liveEffectivePIDRateHz, model.liveLastBatchSize)
                         )
                         LabeledContent(
                             "DID実効レート",
@@ -792,8 +797,13 @@ private struct SettingsPage: View {
                         .disabled(model.isLivePolling)
 
                         LabeledContent(
-                            "ライブ実効レート",
+                            "実ELMコマンド",
                             value: String(format: "%.1f req/s", model.liveEffectiveRequestRateHz)
+                        )
+                        LabeledContent(
+                            "実PID要求",
+                            value: String(format: "%.1f PID/s（バッチ %d件）",
+                                          model.liveEffectivePIDRateHz, model.liveLastBatchSize)
                         )
 
                         Divider()
