@@ -64,7 +64,9 @@ public func parseStandardPIDBitmaps(_ text: String, base: UInt8) -> [StandardPID
         let mask = item.data.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         let supported = Set((0..<32).compactMap { bit -> UInt8? in
             guard (mask & (UInt32(1) << (31 - bit))) != 0 else { return nil }
-            return UInt8(Int(base) + bit + 1)
+            let pid = Int(base) + bit + 1
+            guard pid <= 0xFF else { return nil }
+            return UInt8(pid)
         })
         return StandardPIDBitmap(canID: item.canID, base: base, mask: mask, supported: supported)
     }
@@ -91,6 +93,17 @@ public struct StandardPIDReading: Codable, Equatable, Sendable {
     public let unit: String?
     public let latencyMs: Double?
 
+    public init(pid: UInt8, responseCANID: String?, timestamp: Date, status: StandardPIDSampleStatus,
+                payloadHex: String, value: Double?, unit: String?, latencyMs: Double?) {
+        self.pid = pid
+        self.responseCANID = responseCANID
+        self.timestamp = timestamp
+        self.status = status
+        self.payloadHex = payloadHex
+        self.value = value
+        self.unit = unit
+        self.latencyMs = latencyMs
+    }
     public var identifier: String {
         String(format: "01%02X", pid) + "@" + (responseCANID ?? "unidentified")
     }
@@ -227,9 +240,9 @@ public func standardPIDCSV(_ rows: [StandardPIDInventoryRow]) -> String {
     let lines = rows.map { r in
         [r.id, r.responseCANID ?? "", String(format: "%02X", r.pid), r.name, r.unit, r.formula,
          r.bitmapSupported ? "true" : "false", String(r.attempts), String(r.successfulSamples),
-         r.latestStatus.rawValue, r.latestValue.map(String.init) ?? "",
-         r.minimum.map(String.init) ?? "", r.maximum.map(String.init) ?? "",
-         r.effectiveHz.map(String.init) ?? "", r.lastPayloadHex].map(quote).joined(separator: ",")
+         r.latestStatus.rawValue, r.latestValue.map { String($0) } ?? "",
+         r.minimum.map { String($0) } ?? "", r.maximum.map { String($0) } ?? "",
+         r.effectiveHz.map { String($0) } ?? "", r.lastPayloadHex].map(quote).joined(separator: ",")
     }
     return ([header] + lines).joined(separator: "\n") + "\n"
 }
