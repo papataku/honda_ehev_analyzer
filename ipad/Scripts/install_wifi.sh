@@ -6,10 +6,10 @@ usage() {
   cat <<'HELP'
 Usage:
   bash ipad/Scripts/install_wifi.sh --list-devices
-  bash ipad/Scripts/install_wifi.sh --device <iPad-ID> --team <Apple-Team-ID> [--launch]
+  bash ipad/Scripts/install_wifi.sh --device <CoreDevice-iPad-ID> --team <Apple-Team-ID> [--xcode-device <Xcode-iPad-UDID>] [--launch]
 
 Instead of flags, set HONDA_IPAD_DEVICE_ID and HONDA_APPLE_TEAM_ID.
-Requires full Xcode, xcodegen, Xcode Personal Team, paired iPad, Developer Mode.
+Requires full Xcode, an Xcode-configured project, paired iPad, Developer Mode.
 A free provisioning profile expires after seven days: rebuild/reinstall.
 HELP
 }
@@ -18,10 +18,12 @@ DEVICE_ID="${HONDA_IPAD_DEVICE_ID:-}"
 TEAM_ID="${HONDA_APPLE_TEAM_ID:-}"
 LAUNCH=false
 LIST=false
+XCODE_DEVICE_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --device) [[ $# -ge 2 ]] || die "--device needs a value"; DEVICE_ID="$2"; shift 2 ;;
     --team) [[ $# -ge 2 ]] || die "--team needs a value"; TEAM_ID="$2"; shift 2 ;;
+    --xcode-device) [[ $# -ge 2 ]] || die "--xcode-device needs Xcode iPad UDID"; XCODE_DEVICE_ID="$2"; shift 2 ;;
     --launch) LAUNCH=true; shift ;;
     --list-devices) LIST=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -30,7 +32,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(uname -s)" == "Darwin" ]] || die "Run on macOS, not Linux/Docker."
-for tool in xcodebuild xcrun xcodegen codesign; do
+for tool in xcodebuild xcrun codesign; do
   command -v "$tool" >/dev/null 2>&1 || die "Missing $tool. Install Xcode and brew install xcodegen."
 done
 XCODE_DIR="$(xcode-select -p 2>/dev/null || true)"
@@ -47,29 +49,45 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IPAD_DIR="$ROOT/ipad"
 [[ -f "$IPAD_DIR/project.yml" ]] || die "ipad/project.yml is missing."
+# XcodeGen regenerates project.pbxproj and discards user-selected Signing & Capabilities
+# values. Reuse the existing project that was successfully signed through the Xcode UI.
+# On first setup only, create a project and require the user to select their Team once.
+if [[ ! -f "$IPAD_DIR/HondaAnalyzer.xcodeproj/project.pbxproj" ]]; then
+  command -v xcodegen >/dev/null 2>&1 || die "Install xcodegen: brew install xcodegen"
+  (cd "$IPAD_DIR" && xcodegen generate)
+  die "Project created. Open ipad/HondaAnalyzer.xcodeproj, set Signing & Capabilities and run successfully on your iPad from Xcode once, then rerun this script. The project is deliberately not regenerated on later runs."
+fi
 
 DEVICES="$(xcrun devicectl list devices)" || die "Device Hub unavailable; pair your iPad in Xcode."
 # Do NOT print all device names and identifiers into public GitHub Actions logs.
 printf '%s\n' "$DEVICES" | grep -Fq -- "$DEVICE_ID" ||
   die "iPad not listed. Pair with this Mac in Xcode Device Hub (same Wi-Fi)."
 
+# devicectl uses a CoreDevice identifier, which may differ from Xcode's UDID.
+# Prefer the same concrete iPad destination that succeeded with Xcode CLI.
+if [[ -z "$XCODE_DEVICE_ID" ]]; then
+  XCODE_DEVICE_ID="$DEVICE_ID"
+fi
+XCODE_DESTINATIONS="$(cd "$IPAD_DIR" && xcodebuild -showdestinations -project HondaAnalyzer.xcodeproj -scheme HondaAnalyzer 2>&1)" ||
+  die "xcodebuild cannot list run destinations."
+printf '%s\n' "$XCODE_DESTINATIONS" | grep -Fq "platform:iOS, " ||
+  die "No physical iPad destination found in Xcode. Pair your iPad in Xcode."
+printf '%s\n' "$XCODE_DESTINATIONS" | grep -Fq "id=$XCODE_DEVICE_ID," ||
+  die "No Xcode device with ID $XCODE_DEVICE_ID. Use --xcode-device with the iPad UDID from 'xcodebuild -showdestinations'."
+
 DERIVED="${HONDA_DERIVED_DATA_DIR:-$HOME/Library/Developer/Xcode/DerivedData/HondaAnalyzer-WiFi}"
 mkdir -p "$DERIVED"
 cd "$IPAD_DIR"
-xcodegen generate
 
-# devicectl can print a CoreDevice ID that differs from the hardware
-# UDID expected by xcodebuild -destination. Build a generic *physical iOS*
-# app, then use the exact CoreDevice ID only to install on the selected iPad.
-# First pair/register this iPad in Xcode once so the free Personal Team
-# development profile already contains the physical device.
+# CRITICAL: Do not run xcodegen here, and do not pass DEVELOPMENT_TEAM or
+# CODE_SIGN_STYLE to xcodebuild. Xcode CLI signing succeeds using the project's
+# own configuration; forcing the same Team ID can fail with "No Account for Team".
 xcodebuild \
   -project HondaAnalyzer.xcodeproj \
   -scheme HondaAnalyzer -configuration Debug \
-  -sdk iphoneos -destination 'generic/platform=iOS' \
+  -sdk iphoneos -destination "platform=iOS,id=$XCODE_DEVICE_ID" \
   -derivedDataPath "$DERIVED" \
-  -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
-  "DEVELOPMENT_TEAM=$TEAM_ID" CODE_SIGN_STYLE=Automatic build
+  -allowProvisioningUpdates build
 
 APP="$DERIVED/Build/Products/Debug-iphoneos/HondaAnalyzer.app"
 [[ -d "$APP" ]] || die "Built iPad app missing: $APP"
