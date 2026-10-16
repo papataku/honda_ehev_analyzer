@@ -130,6 +130,42 @@ struct StandardPIDPage: View {
                     }
                 }
 
+                AnalyzerCard("既存のHonda独自DIDと計算値", systemImage: "waveform.path.ecg") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("標準019Aの1回の応答からHV電圧・HV電流・HV電力を得ます。3件の独立PID要求ではありません。")
+                            .font(.callout)
+                        LabeledContent("HV電圧", value: model.hvVoltage.map { String(format: "%.1f V", $0) } ?? "未取得")
+                        LabeledContent("HV電流", value: model.hvCurrent.map { String(format: "%.1f A", $0) } ?? "未取得")
+                        LabeledContent("HV電力（V×A/1000）", value: model.hvPowerKW.map { String(format: "%.1f kW", $0) } ?? "未取得")
+                        Divider()
+                        Text("既知DID：過去の完全なPositive応答から取得候補になったものです。意味は未同定のままです。")
+                            .font(.callout)
+                        Text("完全Positive候補 \(model.driveCandidates.count)件")
+                            .font(.headline)
+                        ForEach(Array(model.driveCandidates.prefix(40))) { did in
+                            HStack {
+                                Text(did.label)
+                                    .font(.caption.monospaced())
+                                Spacer()
+                                Text("CAN \(did.responseCanID ?? "不明") / \(did.payloadLength)B / 意味未同定")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if model.driveCandidates.count > 40 {
+                            Text("残り \(model.driveCandidates.count - 40)件は走行解析画面で確認してください。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        let partial = model.positiveDids.filter { $0.status == .positivePartial }
+                        if !partial.isEmpty {
+                            Text("不完全応答 \(partial.count)件：末尾不足のため継続取得候補には含めません。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 AnalyzerCard("結果の共有", systemImage: "square.and.arrow.up") {
                     VStack(alignment: .leading, spacing: 12) {
                         if let url = model.latestPIDCSVURL {
