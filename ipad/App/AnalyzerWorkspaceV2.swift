@@ -5,6 +5,7 @@ import HondaAnalyzerCore
 enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case driving
+    case standardPID
     case discovery
     case sessions
     case technical
@@ -16,6 +17,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "ダッシュボード"
         case .driving: return "走行解析"
+        case .standardPID: return "追加メーター候補"
         case .discovery: return "DID探索"
         case .sessions: return "セッション"
         case .technical: return "技術情報"
@@ -27,6 +29,7 @@ enum AnalyzerSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.50percent"
         case .driving: return "chart.xyaxis.line"
+        case .standardPID: return "list.bullet.rectangle"
         case .discovery: return "magnifyingglass.circle"
         case .sessions: return "externaldrive.fill"
         case .technical: return "terminal"
@@ -74,6 +77,8 @@ struct FinalAnalyzerWorkspace: View {
                         onOpenDiscovery: { selection = .discovery },
                         onOpenDashboard: { selection = .dashboard }
                     )
+                case .standardPID:
+                    StandardPIDPage(model: model)
                 case .discovery:
                     DiscoveryPage(model: model)
                 case .sessions:
