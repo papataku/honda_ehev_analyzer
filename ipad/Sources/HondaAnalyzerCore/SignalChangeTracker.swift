@@ -27,6 +27,7 @@ public struct SignalChangeTracker {
         var rawMode: Bool
         var changeCount: Int = 0
         var lastUpdated: Date = .distantPast
+        var lastChangedAt: Date = .distantPast
         var points: [ObservedSignalPoint] = []
     }
     private var entries: [String: Entry] = [:]
@@ -85,7 +86,10 @@ public struct SignalChangeTracker {
         entry.raw = payload
         entry.lastNumeric = value
         entry.lastUpdated = date
-        if changed { entry.changeCount += 1 }
+        if changed {
+            entry.changeCount += 1
+            entry.lastChangedAt = date
+        }
         entry.points.append(ObservedSignalPoint(date: date, value: delta))
         if entry.points.count > maxPoints {
             entry.points.removeFirst(entry.points.count - maxPoints)
@@ -99,11 +103,11 @@ public struct SignalChangeTracker {
             return ObservedSignalTrend(
                 id: key, title: entry.title, unit: entry.unit,
                 isRawChange: entry.rawMode, changeCount: entry.changeCount,
-                lastUpdated: entry.lastUpdated, points: entry.points
+                lastUpdated: entry.lastChangedAt, points: entry.points
             )
         }.sorted {
-            if $0.changeCount != $1.changeCount { return $0.changeCount > $1.changeCount }
-            return $0.lastUpdated > $1.lastUpdated
+            if $0.lastUpdated != $1.lastUpdated { return $0.lastUpdated > $1.lastUpdated }
+            return $0.changeCount > $1.changeCount
         }.prefix(max(0, limit)).map { $0 }
     }
 }
