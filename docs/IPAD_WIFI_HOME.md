@@ -91,10 +91,11 @@ Xcode・ログインユーザーのKeychain・Device Hubへのアクセスが必
 2. Mac miniの**Xcodeにログイン済みの同じユーザー**でRunnerを実行。
    初回は `./run.sh` などで対話的に動作確認し、Keychainが利用可能か確認。
    Mac miniでログアウトした状態やDockerでの使用は想定していません。
-3. GitHub → Settings → Secrets and variables → Actions → **Variables**
-   （または `home-ipad` EnvironmentのVariables）を作成：
-   - `HONDA_APPLE_TEAM_ID`: XcodeのPersonal Team ID
-   - `HONDA_IPAD_DEVICE_ID`: Wi-Fiペアリング済みiPadのDevice Hub識別子
+3. GitHub → Settings → Secrets and variables → Actions に登録：
+   - **Variables**: `HONDA_APPLE_TEAM_ID` = XcodeのPersonal Team ID
+   - **Secrets**: `HONDA_IPAD_DEVICE_ID` = Wi-Fiペアリング済みiPadのDevice Hub識別子
+     （公開GitHub Actionsログで端末固有IDを漏らさないため、必ずSecret扱い）
+   `home-ipad` Environmentで管理しても構いませんが、workflowから参照できる必要があります。
    配布証明書・TestFlight用APIキー・有料契約は不要。
 4. GitHubで `home-ipad` Environmentを作成し、
    **必要に応じて承認者とmainからの配信ルールを設定**して誤インストールを防止。
