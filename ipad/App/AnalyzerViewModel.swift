@@ -393,9 +393,13 @@ final class AnalyzerViewModel: ObservableObject {
 
     private func trackStandardReading(_ reading: StandardPIDReading) {
         guard reading.status == .decoded || reading.status == .uninterpreted else { return }
+        let ascii = Array(reading.payloadHex.utf8)
+        let data = Data((0..<(ascii.count / 2)).compactMap { pair -> UInt8? in
+            UInt8(String(decoding: ascii[(pair * 2)..<(pair * 2 + 2)], as: UTF8.self), radix: 16)
+        })
         signalChangeTracker.observePID(
             pid: reading.pid, canID: reading.responseCANID,
-            value: reading.value, payload: Data(reading.payloadHex.utf8),
+            value: reading.value, payload: data,
             unit: reading.unit ?? "",
             name: standardPIDCatalog[reading.pid]?.name ?? String(format: "PID %02X", reading.pid),
             at: reading.timestamp
@@ -507,6 +511,11 @@ final class AnalyzerViewModel: ObservableObject {
                             ).completed
                             didQueue[ecu.source] = priority.filter { !old.contains($0) }
                         }
+                    }
+                    // Continue low-rate sampling after the first survey so
+                    // changing supported PIDs are actually discovered over time.
+                    if pidQueue.isEmpty && !seenPIDs.isEmpty {
+                        pidQueue = seenPIDs.sorted()
                     }
                     let unknownAvailable = didQueue.values.contains { !$0.isEmpty }
                     let action = planner.next(
