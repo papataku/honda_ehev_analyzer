@@ -74,13 +74,21 @@ final class UnifiedAcquisitionTests: XCTestCase {
 
     func testPhysicalUDS22ConservativeM5CANCapabilityGate() {
         XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
-            negotiatedM5CAN: true, adapterName: nil
+            negotiatedM5CAN: true, identifiedM5CAN: false, adapterName: nil
         ))
         XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
-            negotiatedM5CAN: false, adapterName: "M5CAN-Dial"
+            negotiatedM5CAN: false, identifiedM5CAN: false, adapterName: "M5CAN-Dial"
         ))
         XCTAssertFalse(PhysicalUDS22Compatibility.restrictionApplies(
-            negotiatedM5CAN: false, adapterName: "KW905"
+            negotiatedM5CAN: false, identifiedM5CAN: false, adapterName: "KW905"
+        ))
+        // Capability probe can fail while ATI still identifies the actual
+        // adapter. Its BLE display name may be generic or misleading.
+        XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: false, identifiedM5CAN: true, adapterName: "KW905"
+        ))
+        XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: false, identifiedM5CAN: true, adapterName: nil
         ))
         // A Mode01 responder is not evidence that M5CAN supports physical UDS22.
         XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: "01", m5canRestricted: true))
