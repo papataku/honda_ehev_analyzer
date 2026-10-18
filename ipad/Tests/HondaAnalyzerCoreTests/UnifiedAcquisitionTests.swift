@@ -73,15 +73,24 @@ final class UnifiedAcquisitionTests: XCTestCase {
     }
 
     func testPhysicalUDS22ConservativeM5CANCapabilityGate() {
+        XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: true, adapterName: nil
+        ))
+        XCTAssertTrue(PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: false, adapterName: "M5CAN-Dial"
+        ))
+        XCTAssertFalse(PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: false, adapterName: "KW905"
+        ))
         // A Mode01 responder is not evidence that M5CAN supports physical UDS22.
-        XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: "01", verifiedM5CAN: true))
+        XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: "01", m5canRestricted: true))
         for ecu in ["02", "06", "0E", "EF"] {
-            XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: ecu, verifiedM5CAN: true))
-            XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: ecu, verifiedM5CAN: false))
+            XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: ecu, m5canRestricted: true))
+            XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: ecu, m5canRestricted: false))
         }
-        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "1", verifiedM5CAN: false))
-        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "GG", verifiedM5CAN: false))
-        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "0101", verifiedM5CAN: false))
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "1", m5canRestricted: false))
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "GG", m5canRestricted: false))
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "0101", m5canRestricted: false))
     }
 
     func testUnifiedUnknownDiscoveryRequiresBothFreshZeroAndParkConfirmation() {
