@@ -11,6 +11,7 @@ private final class PassiveM5CANFake: ElmByteTransport {
     var capability = "M5CAN-CAPS PROTO=1.2 FW=0.4.4-phase3f-demo-touch " +
         "BATCH=16 OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT " +
         "UDS_ECUS=01,02,06,0E,EF TX=OFF"
+    var omitCapabilityReply = false
 
     func write(_ data: Data) throws {
         let command = String(decoding: data, as: UTF8.self)
@@ -20,7 +21,9 @@ private final class PassiveM5CANFake: ElmByteTransport {
         case "ATZ", "ATI":
             onReceive?(Data("M5CAN ELM327 compatible\r>".utf8))
         case "ATM5CAP":
-            onReceive?(Data((capability + "\r>").utf8))
+            if !omitCapabilityReply {
+                onReceive?(Data((capability + "\r>").utf8))
+            }
         default:
             onReceive?(Data("OK\r>".utf8))
         }
@@ -116,6 +119,35 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
             let info = try await session.command("ATI")
             XCTAssertTrue(info.success)
         }
+    }
+
+    @MainActor
+    func testCapabilityTimeoutNeverFallsBackToRawVehicleRequests() async throws {
+        let transport = PassiveM5CANFake()
+        transport.omitCapabilityReply = true
+        let session = ElmCommandSession(transport: transport)
+        _ = await session.initialize() // timeout is intentionally 2 seconds
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        let count = transport.commands.count
+        XCTAssertEqual(transport.commands.last, "ATM5CAP")
+        do {
+            _ = try await session.command("010C")
+            XCTFail("CAPS timeout must not fall back to legacy CAN TX")
+        } catch ElmCommandError.m5canUnrecognizedCapabilities {
+            // Expected, with no additional BLE write or TX lease request.
+        }
+        XCTAssertEqual(transport.commands.count, count)
+
+        // Reinitializing with explicit old-firmware '?' is a new handshake,
+        // never reuse the prior timeout's state or claim a future protocol.
+        transport.omitCapabilityReply = false
+        transport.capability = "?"
+        _ = await session.initialize()
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        _ = try await session.command("010D")
+        XCTAssertEqual(transport.commands.last, "010D")
     }
 
     @MainActor
