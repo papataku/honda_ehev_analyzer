@@ -364,19 +364,38 @@ final class AnalyzerViewModel: ObservableObject {
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             if let caps = session.negotiatedM5CAN {
-                vehicleProtocolLabel = caps.description
+                vehicleProtocolLabel = caps.isPassiveDiagnosticBench
+                    ? caps.description + " — CAN送信無効（実験用）"
+                    : caps.description
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
-                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming)"
+                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming) tx=\(caps.isPassiveDiagnosticBench ? "OFF" : "LEGACY")"
                     )
+                }
+            } else if session.m5canCapabilitiesRejected {
+                vehicleProtocolLabel = "M5CAN能力交渉エラー — 車両診断を安全停止"
+                if let store = captureStore, let sid = captureSessionID {
+                    store.addEvent(sessionID: sid, at: Date(),
+                                   kind: "M5CAN_PROTOCOL_REJECTED",
+                                   note: "unsupported_or_timed_out_caps; vehicle_tx_blocked")
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
             }
-            elmInitialized = failed.isEmpty
+            let incompatible = session.m5canCapabilitiesRejected
+            let passive = session.negotiatedM5CAN?.isPassiveDiagnosticBench == true
+            elmInitialized = failed.isEmpty && !incompatible && !passive
             if !elmInitialized { knownSignalsValidated = false }
-            statusMessage = failed.isEmpty ? "ELM初期化完了" : "ELM初期化完了（失敗 \(failed.count)件）"
+            if incompatible {
+                statusMessage = "M5CAN能力交渉に失敗。CAN診断は安全のため無効です"
+            } else if passive {
+                statusMessage = "M5CAN実験ファーム（TX=OFF）。車両通信はできません"
+            } else {
+                statusMessage = failed.isEmpty
+                    ? "ELM初期化完了"
+                    : "ELM初期化完了（失敗 \(failed.count)件）"
+            }
             isBusy = false
         }
     }
