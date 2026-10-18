@@ -123,6 +123,61 @@ final class UnifiedAcquisitionTests: XCTestCase {
         ))
     }
 
+    func testParkConfirmationRevokedAfterMotionAndSpeedDataGap() {
+        let stationarySamples: [Double?] = [0, 0.04, 0.1]
+        for speed in stationarySamples {
+            XCTAssertFalse(ParkConfirmationGuard.requiresNewConfirmation(speedKmh: speed))
+        }
+        let invalidOrMoving: [Double?] = [
+            nil, -1, 0.11, 1, 30, .nan, .infinity, -.infinity
+        ]
+        for speed in invalidOrMoving {
+            XCTAssertTrue(ParkConfirmationGuard.requiresNewConfirmation(speedKmh: speed))
+        }
+
+        var gate = AutomaticZeroSpeedGate()
+        let start = Date(timeIntervalSince1970: 1000)
+        var confirmedPark = true
+        for offset in 0...5 {
+            gate.observe(speedKmh: 0, at: start.addingTimeInterval(Double(offset)))
+        }
+        XCTAssertTrue(gate.canProbe(at: start.addingTimeInterval(5)))
+        XCTAssertTrue(mayResumeUnknownDID(
+            stableZero: gate.canProbe(at: start.addingTimeInterval(5)),
+            parkingConfirmed: confirmedPark
+        ))
+
+        // Driving immediately revokes confirmation, which MUST stay
+        // revoked even when speed later returns to a stable zero.
+        let drivingSpeed = 12.0
+        if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: drivingSpeed) {
+            confirmedPark = false
+        }
+        gate.observe(speedKmh: drivingSpeed, at: start.addingTimeInterval(6))
+        for offset in 7...12 {
+            gate.observe(speedKmh: 0, at: start.addingTimeInterval(Double(offset)))
+        }
+        XCTAssertTrue(gate.canProbe(at: start.addingTimeInterval(12)))
+        XCTAssertFalse(mayResumeUnknownDID(
+            stableZero: gate.canProbe(at: start.addingTimeInterval(12)),
+            parkingConfirmed: confirmedPark
+        ))
+        // A person must check Park again; a speed value cannot set it.
+        confirmedPark = true
+        XCTAssertTrue(mayResumeUnknownDID(
+            stableZero: gate.canProbe(at: start.addingTimeInterval(12)),
+            parkingConfirmed: confirmedPark
+        ))
+        if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: nil) {
+            confirmedPark = false
+        }
+        gate.observe(speedKmh: nil, at: start.addingTimeInterval(12.1))
+        XCTAssertFalse(mayResumeUnknownDID(
+            stableZero: gate.canProbe(at: start.addingTimeInterval(12.1)),
+            parkingConfirmed: confirmedPark
+        ))
+    }
+
     func testAutomaticallyShowsChangingNumericsButHidesConstantOnes() {
         var tracker = SignalChangeTracker(maxTracked: 6, maxPoints: 4)
         let now = Date(timeIntervalSince1970: 1_000)
