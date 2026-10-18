@@ -95,8 +95,11 @@ public struct UnifiedAcquisitionPlanner: Sendable {
 public enum PhysicalUDS22Compatibility {
     /// Device name can only RESTRICT diagnostic traffic; it never grants a capability.
     /// If a M5CAN capability handshake fails, remain on the safe ECU01-only path.
-    public static func restrictionApplies(negotiatedM5CAN: Bool, adapterName: String?) -> Bool {
-        negotiatedM5CAN || (adapterName?.uppercased().contains("M5CAN") ?? false)
+    public static func restrictionApplies(
+        negotiatedM5CAN: Bool, identifiedM5CAN: Bool, adapterName: String?
+    ) -> Bool {
+        negotiatedM5CAN || identifiedM5CAN ||
+            (adapterName?.uppercased().contains("M5CAN") ?? false)
     }
 
     public static func allows(ecu: String, m5canRestricted: Bool) -> Bool {
