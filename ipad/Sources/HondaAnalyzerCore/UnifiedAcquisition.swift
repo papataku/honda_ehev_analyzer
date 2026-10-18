@@ -93,10 +93,16 @@ public struct UnifiedAcquisitionPlanner: Sendable {
 /// negotiates a versioned, explicitly advertised multi-ECU capability.
 /// KW905/ordinary ELM access is not restricted by M5CAN's private allowlist.
 public enum PhysicalUDS22Compatibility {
-    public static func allows(ecu: String, verifiedM5CAN: Bool) -> Bool {
+    /// Device name can only RESTRICT diagnostic traffic; it never grants a capability.
+    /// If a M5CAN capability handshake fails, remain on the safe ECU01-only path.
+    public static func restrictionApplies(negotiatedM5CAN: Bool, adapterName: String?) -> Bool {
+        negotiatedM5CAN || (adapterName?.uppercased().contains("M5CAN") ?? false)
+    }
+
+    public static func allows(ecu: String, m5canRestricted: Bool) -> Bool {
         guard ecu.count == 2, let source = UInt8(ecu, radix: 16) else {
             return false
         }
-        return !verifiedM5CAN || source == 0x01
+        return !m5canRestricted || source == 0x01
     }
 }
