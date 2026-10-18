@@ -8,7 +8,7 @@ import XCTest
 private final class PassiveM5CANFake: ElmByteTransport {
     var onReceive: ((Data) -> Void)?
     private(set) var commands: [String] = []
-    let capability = "M5CAN-CAPS PROTO=1.2 FW=0.4.4-phase3f-demo-touch " +
+    var capability = "M5CAN-CAPS PROTO=1.2 FW=0.4.4-phase3f-demo-touch " +
         "BATCH=16 OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT " +
         "UDS_ECUS=01,02,06,0E,EF TX=OFF"
 
@@ -71,6 +71,77 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         session.resetProtocolNegotiation()
         XCTAssertNil(session.negotiatedM5CAN)
         XCTAssertFalse(session.identifiesAsM5CAN)
+    }
+
+
+    @MainActor
+    func testInvalidAdvertisedCapabilitiesNeverFallBackToELM() async throws {
+        let baseline = PassiveM5CANFake().capability
+        let malformed = [
+            baseline.replacingOccurrences(of: "TX=OFF", with: "TX=ON"),
+            baseline.replacingOccurrences(of: "TX=OFF", with: "TX=READ_ONLY"),
+            baseline.replacingOccurrences(of: " TX=OFF", with: ""),
+            baseline.replacingOccurrences(of: "PROTO=1.2", with: "PROTO=2.0"),
+            "M5CAN-CAPS PROTO=1.2 FW=0.5 BATCH=16 OPS=UDS22 STREAM=0",
+            "OK"
+        ]
+        for reply in malformed {
+            let fake = PassiveM5CANFake()
+            fake.capability = reply
+            let session = ElmCommandSession(transport: fake)
+            _ = await session.initialize()
+            XCTAssertTrue(session.identifiesAsM5CAN)
+            XCTAssertNil(session.negotiatedM5CAN)
+            XCTAssertTrue(session.m5canCapabilitiesRejected, reply)
+
+            let before = fake.commands.count
+            for command in ["010C", "222012", "ATM5B01:2012", "ATM5TX1"] {
+                do {
+                    _ = try await session.command(command)
+                    XCTFail("malformed M5CAN-CAPS should reject \(command)")
+                } catch ElmCommandError.m5canUnrecognizedCapabilities {
+                    // No BLE diagnostic write (and no lease request).
+                } catch {
+                    XCTFail("unexpected \(command): \(error)")
+                }
+            }
+            do {
+                _ = try await session.batchRead(group: .ecu01ReadDID, ids: ["2012"])
+                XCTFail("malformed M5CAN-CAPS must not issue a batch")
+            } catch ElmCommandError.m5canUnrecognizedCapabilities {
+                // Expected.
+            }
+            XCTAssertEqual(fake.commands.count, before)
+            // Metadata remains accessible for diagnostics; no vehicle TX.
+            let info = try await session.command("ATI")
+            XCTAssertTrue(info.success)
+        }
+    }
+
+    @MainActor
+    func testUnsupportedOldCapabilitiesRetainLegacyFallbackAndReconnectClearsLock() async throws {
+        let fake = PassiveM5CANFake()
+        fake.capability = "?"
+        let session = ElmCommandSession(transport: fake)
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.negotiatedM5CAN)
+        _ = try await session.command("010C")
+        XCTAssertEqual(fake.commands.suffix(2), ["ATM5TX1", "010C"])
+
+        // Device replacement must clear a previously rejected profile.
+        session.resetProtocolNegotiation()
+        fake.capability = "M5CAN-CAPS PROTO=2.0 FW=2 BATCH=16 OPS=UDS22 STREAM=0 TX=OFF"
+        _ = await session.initialize()
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        session.resetProtocolNegotiation()
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        fake.capability = "?"
+        _ = await session.initialize()
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        _ = try await session.command("010D")
+        XCTAssertEqual(fake.commands.last, "010D")
     }
 
     @MainActor
