@@ -10,6 +10,7 @@ final class AnalyzerViewModel: ObservableObject {
     private var m5canPhysicalECURestriction: Bool {
         PhysicalUDS22Compatibility.restrictionApplies(
             negotiatedM5CAN: session.negotiatedM5CAN != nil,
+            identifiedM5CAN: session.identifiesAsM5CAN,
             adapterName: ble.connectedDeviceName
         )
     }
