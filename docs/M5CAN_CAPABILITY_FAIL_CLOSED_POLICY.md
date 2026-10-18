@@ -17,6 +17,7 @@ answers an optional, versioned `ATM5CAP` query. An advertised ECU list is
 | M5CAN | `TX=ON` / `TX=READ_ONLY` | **blocked** | mode has not been safety-approved |
 | M5CAN | unexpected successful `OK` or other text | **blocked** | not a recognized negotiation |
 | M5CAN | no response / BLE timeout | **blocked** | no evidence of supported legacy/future mode |
+| M5CAN identified by ATZ | ATI fails or replies as a generic ELM | **blocked unless valid CAPS later succeeds** | adapter identity may not be silently downgraded by a metadata response |
 
 When blocked, single PID/DID commands, dedicated batch commands, experimental
 ECU-targeted requests and lease commands are rejected **before transport.write**.
