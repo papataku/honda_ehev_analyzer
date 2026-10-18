@@ -78,6 +78,10 @@ public final class ElmCommandSession {
     private var pending: Pending?
 
     private var isM5CAN = false
+    /// ATI/ATZ device identity is independent of optional capability support.
+    /// An identified M5CAN with an invalid/older handshake must remain
+    /// restricted, never fall through to arbitrary ELM physical ECU routing.
+    public var identifiesAsM5CAN: Bool { isM5CAN }
     public private(set) var negotiatedM5CAN: M5CANCapabilities?
     private var lastM5CANLeaseRenewal: Date?
     private let m5canLeaseRefreshSeconds: TimeInterval = 2.0

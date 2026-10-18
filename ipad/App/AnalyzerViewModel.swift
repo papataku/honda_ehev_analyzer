@@ -6,6 +6,14 @@ import HondaAnalyzerCore
 final class AnalyzerViewModel: ObservableObject {
     let ble: KW905BLETransport
     private let session: ElmCommandSession
+    // A name hint only tightens access; never grants new CAN addresses.
+    private var m5canPhysicalECURestriction: Bool {
+        PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: session.negotiatedM5CAN != nil,
+            identifiedM5CAN: session.identifiesAsM5CAN,
+            adapterName: ble.connectedDeviceName
+        )
+    }
     private var captureStore: CaptureStore?
     private var captureSessionID: Int64?
     private var liveTask: Task<Void, Never>?
@@ -424,8 +432,11 @@ final class AnalyzerViewModel: ObservableObject {
         unifiedStandardProbes = 0
         unifiedStage = "ライブ監視を開始しました"
         store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_START",
-                       note: "Mode01 and verified-DID while driving; unknown-22 only stable-zero >=5s")
+                       note: "Mode01/verified-DID; unknown-22 only after fresh stable zero and explicit P confirmation")
         refreshDriveCandidates()
+        store.saveDrivePlan(sessionID: sid, at: Date(), candidates: driveCandidates)
+        store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_PLAN",
+                       note: "known_positive_dids=\(driveCandidates.count)")
         unifiedTask = Task { [weak self] in
             guard let self else { return }
             var gate = AutomaticZeroSpeedGate()
@@ -465,12 +476,15 @@ final class AnalyzerViewModel: ObservableObject {
                         Date().timeIntervalSince($0)
                     } ?? 0
                     let moving = (speedKmh ?? 0) > 0
-                    let stableZero = gate.canProbe(at: Date())
+                    let stableZero = mayResumeUnknownDID(
+                        stableZero: gate.canProbe(at: Date()),
+                        parkingConfirmed: stationaryConfirmed
+                    )
                     unifiedStage = moving
                         ? "走行中：ライブ・既知DID・標準PID取得"
                         : stableZero
-                            ? "車速0を5秒以上確認：停止時の未知DID探索"
-                            : "ライブ取得中：車速0の安定を確認中"
+                            ? "車速0が5秒以上安定・P確認済み：未知DID探索"
+                            : "ライブ取得中：車速0の安定とP確認待ち（未知DIDは送信しません）"
                     turn += 1
 
                     // ECU discovery only uses previously validated read-only
@@ -502,6 +516,16 @@ final class AnalyzerViewModel: ObservableObject {
                             store.addEvent(sessionID: sid, at: Date(),
                                            kind: "UNIFIED_ECU_FOUND",
                                            note: observedEcus.map(\.source).joined(separator: ","))
+                            let unsupported = observedEcus.filter {
+                                !PhysicalUDS22Compatibility.allows(
+                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction)
+                            }
+                            if !unsupported.isEmpty {
+                                store.addEvent(sessionID: sid, at: Date(),
+                                               kind: "UNIFIED_ECU_UNSUPPORTED",
+                                               note: "adapter=M5CAN_1.x physical_UDS22_unsupported=" +
+                                                   unsupported.map(\.source).joined(separator: ","))
+                            }
                         }
                         } catch is CancellationError {
                             throw CancellationError()
@@ -516,7 +540,9 @@ final class AnalyzerViewModel: ObservableObject {
                         let priority = Array(UInt16(0x2000)...UInt16(0x20FF)) +
                                        Array(UInt16(0x2200)...UInt16(0x22FF)) +
                                        Array(UInt16(0x2600)...UInt16(0x26FF))
-                        for ecu in observedEcus {
+                        for ecu in observedEcus where PhysicalUDS22Compatibility.allows(
+                            ecu: ecu.source, m5canRestricted: m5canPhysicalECURestriction
+                        ) {
                             let old = loadDidScanHistory(
                                 from: captureDatabaseURLs(), ecu: ecu.source,
                                 start: 0x2000, end: 0x26FF
@@ -604,7 +630,11 @@ final class AnalyzerViewModel: ObservableObject {
                                 }
                             }
                         case .stationaryUnknownDID:
-                            let sources = observedEcus.map(\.source)
+                            let sources = observedEcus.filter {
+                                PhysicalUDS22Compatibility.allows(
+                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction
+                                )
+                            }.map(\.source)
                             if !sources.isEmpty {
                                 nextResponder %= sources.count
                                 var selection: (source: String, did: UInt16)?
@@ -624,7 +654,13 @@ final class AnalyzerViewModel: ObservableObject {
                                     } else {
                                         gate.reset(reason: "未知DID直前の車速不明・走行検出")
                                     }
-                                    if gate.canProbe(at: Date()), !Task.isCancelled,
+                                    if mayResumeUnknownDID(
+                                        stableZero: gate.canProbe(at: Date()),
+                                        parkingConfirmed: stationaryConfirmed
+                                    ), !Task.isCancelled,
+                                       PhysicalUDS22Compatibility.allows(
+                                        ecu: item.source, m5canRestricted: m5canPhysicalECURestriction
+                                       ),
                                        let header = physicalRequestHeaderCommand(for: item.source) {
                                         try await selectHeader(header)
                                         let cmd = String(format: "22%04X", item.did)
@@ -641,6 +677,9 @@ final class AnalyzerViewModel: ObservableObject {
                                             outcome.status == .positivePartial {
                                             refreshPositiveDids(flush: true)
                                             refreshDriveCandidates()
+                                            store.saveDrivePlan(
+                                                sessionID: sid, at: Date(), candidates: driveCandidates
+                                            )
                                         }
                                     } else {
                                         didQueue[item.source, default: []].insert(item.did, at: 0)
@@ -888,6 +927,14 @@ final class AnalyzerViewModel: ObservableObject {
         }
         guard observedEcus.contains(where: { $0.source == ecu }) else {
             statusMessage = "先に安全なECU候補確認を実行し、観測されたECUを選択してください"
+            return
+        }
+        guard PhysicalUDS22Compatibility.allows(
+            ecu: ecu, m5canRestricted: m5canPhysicalECURestriction
+        ) else {
+            statusMessage = "M5CAN PROTO 1.xはECU 01以外の物理UDS22に未対応です。探索は送信せず中止しました"
+            store.addEvent(sessionID: sid, at: Date(), kind: "DID_SCAN_UNSUPPORTED_ECU",
+                           note: "ecu=\(ecu) adapter=M5CAN_1.x")
             return
         }
 
@@ -1414,6 +1461,12 @@ final class AnalyzerViewModel: ObservableObject {
 
     private func sampleKnownDrivingDID(_ candidate: DriveDID) async -> DidProbeOutcome {
         // No ATH0 retry, no unknown DID enumeration, no write/reset service.
+        guard PhysicalUDS22Compatibility.allows(
+            ecu: candidate.ecu, m5canRestricted: m5canPhysicalECURestriction
+        ) else {
+            return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error,
+                                   rawText: "adapter_unsupported_physical_ecu")
+        }
         guard let header = physicalRequestHeaderCommand(for: candidate.ecu) else {
             return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error)
         }

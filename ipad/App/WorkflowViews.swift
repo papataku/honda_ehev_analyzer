@@ -276,9 +276,12 @@ struct OperationModeCards: View {
             LazyVGrid(columns: columns, spacing: 12) {
                 AnalyzerCard("おすすめ：統合自動収集", systemImage: "waveform.path.ecg.rectangle") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("ライブ表示と標準PID・既知DIDの収集を1回の操作で開始します。車速0が5秒以上続いたら、車速を再確認して未知DIDも自動探索します。")
+                        Text("走行中は既知の読み取り専用信号を取得します。未知DIDの探索は安全に駐車し、車速0が5秒以上安定し、Pレンジを手動確認した場合にだけ行います。")
                             .font(.callout)
-                        Text("車速0はPレンジの証明ではありません。信号待ちでも作動し得るため、未知DIDは読取専用に限定します。")
+                        Toggle("安全な場所で停車し、Pレンジに入れたことを確認", isOn: $model.stationaryConfirmed)
+                            .font(.subheadline)
+                            .accessibilityHint("車速0だけではPレンジを判定できません。停車して実際にPへ入れた場合のみONにしてください。")
+                        Text("走行検出・通信切断時にP確認は解除されます。再び未知DIDを探す場合は駐車後に確認し直してください。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if model.isUnifiedCollecting {
