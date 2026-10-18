@@ -92,6 +92,9 @@ public final class ElmCommandSession {
     /// A structurally advertised but malformed/unsupported capability is
     /// NOT legacy firmware. Never fall back to generic ELM transmission.
     public private(set) var m5canCapabilitiesRejected = false
+    /// Stable diagnostic evidence for SQLite; no private adapter response
+    /// bytes are required to distinguish timeout, bad identity or syntax.
+    public private(set) var m5canCapabilityRejectionReason: String?
     private var lastM5CANLeaseRenewal: Date?
     private let m5canLeaseRefreshSeconds: TimeInterval = 2.0
 
@@ -107,6 +110,7 @@ public final class ElmCommandSession {
         isM5CAN = false
         negotiatedM5CAN = nil
         m5canCapabilitiesRejected = false
+        m5canCapabilityRejectionReason = nil
         lastM5CANLeaseRenewal = nil
         framer.reset()
         if let current = pending {
@@ -168,12 +172,15 @@ public final class ElmCommandSession {
             // An ATI failure (or a silent CAPS query) is not proof that
             // the M5CAN identified by ATZ is an ordinary ELM adapter.
             m5canCapabilitiesRejected = true
-            if results.last(where: { $0.command == "ATI" })?.success == true,
-               let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
+            m5canCapabilityRejectionReason = "ati_failed"
+            if results.last(where: { $0.command == "ATI" })?.success == true {
+                m5canCapabilityRejectionReason = "caps_timeout_or_io_error"
+                if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
                 let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
                 if let parsed {
                     negotiatedM5CAN = parsed
                     m5canCapabilitiesRejected = false
+                    m5canCapabilityRejectionReason = nil
                 } else {
                     let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
@@ -183,6 +190,11 @@ public final class ElmCommandSession {
                     // commands. Only these exact tokens enable legacy ELM
                     // read-only commands; a malformed CAPS or "OK" cannot.
                     m5canCapabilitiesRejected = !["?", "ERROR", "NO DATA"].contains(value)
+                    m5canCapabilityRejectionReason = m5canCapabilitiesRejected
+                        ? (value.contains("M5CAN-CAPS")
+                            ? "caps_unrecognized" : "caps_unexpected_reply")
+                        : nil
+                }
                 }
             }
         }
