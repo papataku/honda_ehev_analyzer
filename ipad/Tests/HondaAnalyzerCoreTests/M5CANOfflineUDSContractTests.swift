@@ -1,5 +1,31 @@
+import Foundation
 import XCTest
 @testable import HondaAnalyzerCore
+
+@MainActor
+private final class OfflineCapsFixtureTransport: ElmByteTransport {
+    var onReceive: ((Data) -> Void)?
+    var sentCommands: [String] = []
+    func write(_ data: Data) throws {
+        let command = String(decoding: data, as: UTF8.self)
+        sentCommands.append(command)
+        let reply: String
+        switch command {
+        case "ATI\r":
+            reply = "M5CAN v0.4 ELM-CAN compatible"
+        case "ATM5CAP\r":
+            reply = "M5CAN-CAPS PROTO=1.1 FW=0.4.4 BATCH=16 " +
+                "OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT"
+        case "ATM5CAPD\r":
+            reply = "M5CAN-CAPS PROTO=1.2 FW=0.4.4 BATCH=16 " +
+                "OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT " +
+                "UDS_ECUS=01,02,06,0E,EF ROUTE=R12 TX=DISABLED"
+        default:
+            reply = "?"
+        }
+        onReceive?(Data((reply + "\r>").utf8))
+    }
+}
 
 final class M5CANOfflineUDSContractTests: XCTestCase {
     private let prefix =
@@ -47,6 +73,27 @@ final class M5CANOfflineUDSContractTests: XCTestCase {
         XCTAssertNil(M5CANOfflineUDSContract.parse(
             prefix.replacingOccurrences(of: "PROTO=1.2", with: "PROTO=1.3") +
                 " TX=DISABLED"
+        ))
+    }
+
+    @MainActor
+    func testOfflineMetadataExchangeDoesNotSendVehicleRequest() async throws {
+        let transport = OfflineCapsFixtureTransport()
+        let session = ElmCommandSession(transport: transport)
+        let identity = try await session.command("ATI")
+        XCTAssertTrue(identity.success)
+        XCTAssertTrue(session.identifiesAsM5CAN)
+
+        let legacy = try await session.command("ATM5CAP")
+        XCTAssertEqual(M5CANCapabilities.parse(legacy.text)?.minor, 1)
+        let offline = try await session.command("ATM5CAPD")
+        let contract = try XCTUnwrap(M5CANOfflineUDSContract.parse(offline.text))
+        XCTAssertEqual(contract.testOnlyRouteVector(ecu: "02", did: "2012"),
+                       "ATM5R12:02:2012")
+        XCTAssertEqual(transport.sentCommands,
+                       ["ATI\r", "ATM5CAP\r", "ATM5CAPD\r"])
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(
+            ecu: "02", m5canRestricted: session.identifiesAsM5CAN
         ))
     }
 
