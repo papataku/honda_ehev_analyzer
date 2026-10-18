@@ -28,6 +28,10 @@ ELM initialization complete or enable capture, and recording should include a
 Reconnecting a device calls `resetProtocolNegotiation`, clearing both the
 capability and the rejection state. The new BLE peer MUST identify and
 negotiate again; a previous allowance or rejection must not be reused.
+A fresh successful `ATZ` explicitly identifying an ordinary `ELM327` also
+clears the old M5CAN identity and lease for compatibility with adapter
+replacement. A later `ATI` error or generic name alone must not downgrade
+an M5CAN identity obtained from `ATZ` on the same initialization.
 
 ## Tests and release gates
 
