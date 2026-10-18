@@ -6,6 +6,13 @@ import HondaAnalyzerCore
 final class AnalyzerViewModel: ObservableObject {
     let ble: KW905BLETransport
     private let session: ElmCommandSession
+    // A name hint only tightens access; never grants new CAN addresses.
+    private var m5canPhysicalECURestriction: Bool {
+        PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: session.negotiatedM5CAN != nil,
+            adapterName: ble.connectedDeviceName
+        )
+    }
     private var captureStore: CaptureStore?
     private var captureSessionID: Int64?
     private var liveTask: Task<Void, Never>?
@@ -510,7 +517,7 @@ final class AnalyzerViewModel: ObservableObject {
                                            note: observedEcus.map(\.source).joined(separator: ","))
                             let unsupported = observedEcus.filter {
                                 !PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, verifiedM5CAN: session.negotiatedM5CAN != nil)
+                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction)
                             }
                             if !unsupported.isEmpty {
                                 store.addEvent(sessionID: sid, at: Date(),
@@ -533,7 +540,7 @@ final class AnalyzerViewModel: ObservableObject {
                                        Array(UInt16(0x2200)...UInt16(0x22FF)) +
                                        Array(UInt16(0x2600)...UInt16(0x26FF))
                         for ecu in observedEcus where PhysicalUDS22Compatibility.allows(
-                            ecu: ecu.source, verifiedM5CAN: session.negotiatedM5CAN != nil
+                            ecu: ecu.source, m5canRestricted: m5canPhysicalECURestriction
                         ) {
                             let old = loadDidScanHistory(
                                 from: captureDatabaseURLs(), ecu: ecu.source,
@@ -624,7 +631,7 @@ final class AnalyzerViewModel: ObservableObject {
                         case .stationaryUnknownDID:
                             let sources = observedEcus.filter {
                                 PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, verifiedM5CAN: session.negotiatedM5CAN != nil
+                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction
                                 )
                             }.map(\.source)
                             if !sources.isEmpty {
@@ -651,7 +658,7 @@ final class AnalyzerViewModel: ObservableObject {
                                         parkingConfirmed: stationaryConfirmed
                                     ), !Task.isCancelled,
                                        PhysicalUDS22Compatibility.allows(
-                                        ecu: item.source, verifiedM5CAN: session.negotiatedM5CAN != nil
+                                        ecu: item.source, m5canRestricted: m5canPhysicalECURestriction
                                        ),
                                        let header = physicalRequestHeaderCommand(for: item.source) {
                                         try await selectHeader(header)
@@ -922,7 +929,7 @@ final class AnalyzerViewModel: ObservableObject {
             return
         }
         guard PhysicalUDS22Compatibility.allows(
-            ecu: ecu, verifiedM5CAN: session.negotiatedM5CAN != nil
+            ecu: ecu, m5canRestricted: m5canPhysicalECURestriction
         ) else {
             statusMessage = "M5CAN PROTO 1.xはECU 01以外の物理UDS22に未対応です。探索は送信せず中止しました"
             store.addEvent(sessionID: sid, at: Date(), kind: "DID_SCAN_UNSUPPORTED_ECU",
@@ -1454,7 +1461,7 @@ final class AnalyzerViewModel: ObservableObject {
     private func sampleKnownDrivingDID(_ candidate: DriveDID) async -> DidProbeOutcome {
         // No ATH0 retry, no unknown DID enumeration, no write/reset service.
         guard PhysicalUDS22Compatibility.allows(
-            ecu: candidate.ecu, verifiedM5CAN: session.negotiatedM5CAN != nil
+            ecu: candidate.ecu, m5canRestricted: m5canPhysicalECURestriction
         ) else {
             return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error,
                                    rawText: "adapter_unsupported_physical_ecu")
