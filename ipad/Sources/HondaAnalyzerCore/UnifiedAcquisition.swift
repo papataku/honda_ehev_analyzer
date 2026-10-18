@@ -55,6 +55,17 @@ public struct AutomaticZeroSpeedGate: Sendable {
     }
 }
 
+/// A previous manual Park confirmation is only meaningful while every
+/// subsequently sampled vehicle speed remains valid and stationary.
+/// Invalidate on any motion or unreliable/missing speed; never carry the
+/// confirmation over a drive-stop-drive cycle or transport data gap.
+public enum ParkConfirmationGuard {
+    public static func requiresNewConfirmation(speedKmh: Double?) -> Bool {
+        guard let speedKmh, speedKmh.isFinite else { return true }
+        return speedKmh < 0 || speedKmh > 0.1
+    }
+}
+
 /// One action per scheduler turn. No simultaneous commands can share the ELM lane.
 public enum UnifiedAcquisitionAction: String, Equatable, Sendable {
     case baseline
