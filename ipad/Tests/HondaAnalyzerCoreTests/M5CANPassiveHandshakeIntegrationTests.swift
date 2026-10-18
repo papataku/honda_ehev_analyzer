@@ -128,7 +128,7 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         XCTAssertFalse(session.m5canCapabilitiesRejected)
         XCTAssertNil(session.negotiatedM5CAN)
         _ = try await session.command("010C")
-        XCTAssertEqual(fake.commands.suffix(2), ["ATM5TX1", "010C"])
+        XCTAssertEqual(Array(fake.commands.suffix(2)), ["ATM5TX1", "010C"])
 
         // Device replacement must clear a previously rejected profile.
         session.resetProtocolNegotiation()
