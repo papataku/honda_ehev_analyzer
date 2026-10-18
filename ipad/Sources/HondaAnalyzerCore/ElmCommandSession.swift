@@ -165,23 +165,24 @@ public final class ElmCommandSession {
         // Legacy M5CAN, an incompatible future protocol, and all KW905
         // devices continue using the normal ELM request/response path.
         if isM5CAN && results.last(where: { $0.command == "ATI" })?.success == true {
+            // An unanswered CAPS probe is not evidence of legacy firmware:
+            // keep a restrictive latch until a valid advertised capability
+            // OR an explicit legacy unsupported-command reply is received.
+            m5canCapabilitiesRejected = true
             if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
                 let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
                 if let parsed {
                     negotiatedM5CAN = parsed
+                    m5canCapabilitiesRejected = false
                 } else {
-                    // A declared M5CAN-CAPS response must not silently fall
-                    // back to legacy ELM commands when the protocol/fields
-                    // are unknown. '?' / ERROR (unsupported command) is the
-                    // explicit legacy behavior. Other successful replies to
-                    // ATM5CAP are also incompatible, not proof of legacy.
                     let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .uppercased()
-                    let legacyUnsupported = ["?", "ERROR", "NO DATA"].contains(value)
-                    m5canCapabilitiesRejected = value.contains("M5CAN-CAPS") ||
-                        (reply.success && !legacyUnsupported)
+                    // Older M5CAN models explicitly reject unknown AT
+                    // commands. Only these exact tokens enable legacy ELM
+                    // read-only commands; a malformed CAPS or "OK" cannot.
+                    m5canCapabilitiesRejected = !["?", "ERROR", "NO DATA"].contains(value)
                 }
             }
         }
