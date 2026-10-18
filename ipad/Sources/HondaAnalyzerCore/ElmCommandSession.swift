@@ -165,9 +165,10 @@ public final class ElmCommandSession {
                 ))
             }
         }
-        // Capability discovery is optional and only sent to verified M5CAN.
-        // Legacy M5CAN, an incompatible future protocol, and all KW905
-        // devices continue using the normal ELM request/response path.
+        // Capability discovery is only sent after M5CAN identification.
+        // An explicit legacy unsupported reply keeps older ELM behavior,
+        // whereas unknown/malformed future CAPS and timeouts fail closed.
+        // KW905 never receives the M5CAN-specific probe.
         if isM5CAN {
             // An ATI failure (or a silent CAPS query) is not proof that
             // the M5CAN identified by ATZ is an ordinary ELM adapter.
@@ -176,25 +177,25 @@ public final class ElmCommandSession {
             if results.last(where: { $0.command == "ATI" })?.success == true {
                 m5canCapabilityRejectionReason = "caps_timeout_or_io_error"
                 if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
-                let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
-                if let parsed {
-                    negotiatedM5CAN = parsed
-                    m5canCapabilitiesRejected = false
-                    m5canCapabilityRejectionReason = nil
-                } else {
-                    let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .uppercased()
-                    // Older M5CAN models explicitly reject unknown AT
-                    // commands. Only these exact tokens enable legacy ELM
-                    // read-only commands; a malformed CAPS or "OK" cannot.
-                    m5canCapabilitiesRejected = !["?", "ERROR", "NO DATA"].contains(value)
-                    m5canCapabilityRejectionReason = m5canCapabilitiesRejected
-                        ? (value.contains("M5CAN-CAPS")
-                            ? "caps_unrecognized" : "caps_unexpected_reply")
-                        : nil
-                }
+                    let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
+                    if let parsed {
+                        negotiatedM5CAN = parsed
+                        m5canCapabilitiesRejected = false
+                        m5canCapabilityRejectionReason = nil
+                    } else {
+                        let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .uppercased()
+                        // Older M5CAN models explicitly reject unknown AT
+                        // commands. Only these exact tokens enable legacy ELM
+                        // read-only commands; a malformed CAPS or "OK" cannot.
+                        m5canCapabilitiesRejected = !["?", "ERROR", "NO DATA"].contains(value)
+                        m5canCapabilityRejectionReason = m5canCapabilitiesRejected
+                            ? (value.contains("M5CAN-CAPS")
+                                ? "caps_unrecognized" : "caps_unexpected_reply")
+                            : nil
+                    }
                 }
             }
         }
