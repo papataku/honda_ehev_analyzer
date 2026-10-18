@@ -471,7 +471,16 @@ final class AnalyzerViewModel: ObservableObject {
                         if consecutiveBaselineErrors >= 3 { throw error }
                         continue
                     }
-                    gate.observe(speedKmh: speedKmh.map(Double.init), at: Date())
+                    let sampledSpeed = speedKmh.map(Double.init)
+                    if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: sampledSpeed) {
+                        if stationaryConfirmed {
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_PARK_CONFIRMATION_REVOKED",
+                                           note: "motion_or_invalid_speed")
+                        }
+                        stationaryConfirmed = false
+                    }
+                    gate.observe(speedKmh: sampledSpeed, at: Date())
                     unifiedZeroSeconds = gate.firstZeroAt.map {
                         Date().timeIntervalSince($0)
                     } ?? 0
@@ -649,7 +658,16 @@ final class AnalyzerViewModel: ObservableObject {
                                 }
                                 if let item = selection {
                                     let checkedSpeed = try? await readScanSpeed()
-                                    if let checkedSpeed, checkedSpeed <= 0.1 {
+                                    if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: checkedSpeed) {
+                                        if stationaryConfirmed {
+                                            store.addEvent(sessionID: sid, at: Date(),
+                                                           kind: "UNIFIED_PARK_CONFIRMATION_REVOKED",
+                                                           note: "preflight_motion_or_invalid_speed")
+                                        }
+                                        stationaryConfirmed = false
+                                    }
+                                    if let checkedSpeed, checkedSpeed >= 0,
+                                       checkedSpeed.isFinite, checkedSpeed <= 0.1 {
                                         gate.observe(speedKmh: checkedSpeed, at: Date())
                                     } else {
                                         gate.reset(reason: "未知DID直前の車速不明・走行検出")
