@@ -12,14 +12,18 @@ private final class PassiveM5CANFake: ElmByteTransport {
         "BATCH=16 OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT " +
         "UDS_ECUS=01,02,06,0E,EF TX=OFF"
     var omitCapabilityReply = false
+    var atzIdentity = "M5CAN ELM327 compatible"
+    var atiIdentity = "M5CAN ELM327 compatible"
 
     func write(_ data: Data) throws {
         let command = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         commands.append(command)
         switch command {
-        case "ATZ", "ATI":
-            onReceive?(Data("M5CAN ELM327 compatible\r>".utf8))
+        case "ATZ":
+            onReceive?(Data((atzIdentity + "\r>").utf8))
+        case "ATI":
+            onReceive?(Data((atiIdentity + "\r>").utf8))
         case "ATM5CAP":
             if !omitCapabilityReply {
                 onReceive?(Data((capability + "\r>").utf8))
@@ -119,6 +123,45 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
             let info = try await session.command("ATI")
             XCTAssertTrue(info.success)
         }
+    }
+
+    @MainActor
+    func testATZIdentifiedM5CANCannotBeDowngradedByGenericATI() async throws {
+        let fake = PassiveM5CANFake()
+        fake.atiIdentity = "ELM327 v1.5"
+        let session = ElmCommandSession(transport: fake)
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertTrue(fake.commands.contains("ATM5CAP"))
+        XCTAssertTrue(session.negotiatedM5CAN?.isPassiveDiagnosticBench == true)
+        let count = fake.commands.count
+        do {
+            _ = try await session.command("010C")
+            XCTFail("Generic ATI cannot override earlier M5CAN ATZ identity")
+        } catch ElmCommandError.m5canPassiveTransmitDisabled {
+            // Expected.
+        }
+        XCTAssertEqual(fake.commands.count, count)
+    }
+
+    @MainActor
+    func testM5CANATZWithFailedATICannotTransmit() async throws {
+        let fake = PassiveM5CANFake()
+        fake.atiIdentity = "ERROR"
+        let session = ElmCommandSession(transport: fake)
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertFalse(fake.commands.contains("ATM5CAP"))
+        let count = fake.commands.count
+        do {
+            _ = try await session.command("010C")
+            XCTFail("Unverified M5CAN after failed ATI cannot transmit")
+        } catch ElmCommandError.m5canUnrecognizedCapabilities {
+            // Expected.
+        }
+        XCTAssertEqual(fake.commands.count, count)
     }
 
     @MainActor
