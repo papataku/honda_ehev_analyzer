@@ -72,6 +72,40 @@ final class UnifiedAcquisitionTests: XCTestCase {
         XCTAssertEqual(second, .stationaryUnknownDID)
     }
 
+    func testPhysicalUDS22ConservativeM5CANCapabilityGate() {
+        // A Mode01 responder is not evidence that M5CAN supports physical UDS22.
+        XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: "01", verifiedM5CAN: true))
+        for ecu in ["02", "06", "0E", "EF"] {
+            XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: ecu, verifiedM5CAN: true))
+            XCTAssertTrue(PhysicalUDS22Compatibility.allows(ecu: ecu, verifiedM5CAN: false))
+        }
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "1", verifiedM5CAN: false))
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "GG", verifiedM5CAN: false))
+        XCTAssertFalse(PhysicalUDS22Compatibility.allows(ecu: "0101", verifiedM5CAN: false))
+    }
+
+    func testUnifiedUnknownDiscoveryRequiresBothFreshZeroAndParkConfirmation() {
+        var zero = AutomaticZeroSpeedGate()
+        let start = Date(timeIntervalSince1970: 1000)
+        for i in 0...5 {
+            zero.observe(speedKmh: 0, at: start.addingTimeInterval(Double(i)))
+        }
+        XCTAssertTrue(zero.canProbe(at: start.addingTimeInterval(5)))
+        XCTAssertFalse(mayResumeUnknownDID(
+            stableZero: zero.canProbe(at: start.addingTimeInterval(5)),
+            parkingConfirmed: false
+        ))
+        XCTAssertTrue(mayResumeUnknownDID(
+            stableZero: zero.canProbe(at: start.addingTimeInterval(5)),
+            parkingConfirmed: true
+        ))
+        zero.observe(speedKmh: 1, at: start.addingTimeInterval(5.1))
+        XCTAssertFalse(mayResumeUnknownDID(
+            stableZero: zero.canProbe(at: start.addingTimeInterval(5.1)),
+            parkingConfirmed: true
+        ))
+    }
+
     func testAutomaticallyShowsChangingNumericsButHidesConstantOnes() {
         var tracker = SignalChangeTracker(maxTracked: 6, maxPoints: 4)
         let now = Date(timeIntervalSince1970: 1_000)
