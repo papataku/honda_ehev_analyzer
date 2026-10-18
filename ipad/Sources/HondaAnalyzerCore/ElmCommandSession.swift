@@ -28,6 +28,7 @@ public enum ElmCommandError: LocalizedError {
     case unsafeCommand(String)
     case m5canLeaseFailed(String)
     case dedicatedModeUnavailable
+    case m5canPassiveTransmitDisabled
     case adapterChanged
 
     public var errorDescription: String? {
@@ -42,6 +43,8 @@ public enum ElmCommandError: LocalizedError {
             return "M5CAN TX lease could not be acquired: \(response)"
         case .dedicatedModeUnavailable:
             return "M5CAN専用通信に未対応のファームウェアです"
+        case .m5canPassiveTransmitDisabled:
+            return "M5CAN 1.2実験ビルドはCAN送信無効です。車両診断を開始できません"
         case .adapterChanged:
             return "BLE接続先が変更されました"
         }
@@ -110,6 +113,12 @@ public final class ElmCommandSession {
         guard isReadOnlyVehicleCommand(command) else { throw ElmCommandError.unsafeCommand(command) }
 
         let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = normalized.uppercased().filter { !$0.isWhitespace }
+        if negotiatedM5CAN?.isPassiveDiagnosticBench == true &&
+            (!compact.hasPrefix("AT") || compact.hasPrefix("ATM5B") ||
+             compact.hasPrefix("ATM5R") || compact.hasPrefix("ATM5TX")) {
+            throw ElmCommandError.m5canPassiveTransmitDisabled
+        }
 
         if shouldRenewM5CANLease(before: normalized) {
             let lease = try await sendCommand("ATM5TX1", timeout: min(timeout, 2.0))
@@ -154,6 +163,9 @@ public final class ElmCommandSession {
     public func batchRead(
         group: M5CANBatchGroup, ids: [String], timeout: TimeInterval = 8.0
     ) async throws -> (ElmCommandResult, M5CANBatchResponse) {
+        if negotiatedM5CAN?.isPassiveDiagnosticBench == true {
+            throw ElmCommandError.m5canPassiveTransmitDisabled
+        }
         guard let cap = negotiatedM5CAN,
               (group == .mode01 ? cap.supportsOBD01 : cap.supportsUDS22),
               let command = group.command(ids: ids, capacity: cap.maxBatchIDs)
