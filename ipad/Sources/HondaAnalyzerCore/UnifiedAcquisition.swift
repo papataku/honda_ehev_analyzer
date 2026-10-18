@@ -85,3 +85,18 @@ public struct UnifiedAcquisitionPlanner: Sendable {
         return .idle
     }
 }
+
+
+/// M5CAN PROTO 1.1 currently supports physical UDS22 only on ECU01.
+/// Observing an ECU's Mode01 response is NOT proof of physical UDS routing.
+/// This conservative capability gate must be revisited only after the adapter
+/// negotiates a versioned, explicitly advertised multi-ECU capability.
+/// KW905/ordinary ELM access is not restricted by M5CAN's private allowlist.
+public enum PhysicalUDS22Compatibility {
+    public static func allows(ecu: String, verifiedM5CAN: Bool) -> Bool {
+        guard ecu.count == 2, let source = UInt8(ecu, radix: 16) else {
+            return false
+        }
+        return !verifiedM5CAN || source == 0x01
+    }
+}
