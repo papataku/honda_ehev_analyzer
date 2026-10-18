@@ -164,12 +164,12 @@ public final class ElmCommandSession {
         // Capability discovery is optional and only sent to verified M5CAN.
         // Legacy M5CAN, an incompatible future protocol, and all KW905
         // devices continue using the normal ELM request/response path.
-        if isM5CAN && results.last(where: { $0.command == "ATI" })?.success == true {
-            // An unanswered CAPS probe is not evidence of legacy firmware:
-            // keep a restrictive latch until a valid advertised capability
-            // OR an explicit legacy unsupported-command reply is received.
+        if isM5CAN {
+            // An ATI failure (or a silent CAPS query) is not proof that
+            // the M5CAN identified by ATZ is an ordinary ELM adapter.
             m5canCapabilitiesRejected = true
-            if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
+            if results.last(where: { $0.command == "ATI" })?.success == true,
+               let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
                 let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
                 if let parsed {
                     negotiatedM5CAN = parsed
@@ -276,7 +276,10 @@ public final class ElmCommandSession {
         // Device identity must not persist after changing BLE adapters.
         // A fresh ATZ/ATI identifies the currently connected hardware.
         if upperCommand == "ATZ" || upperCommand == "ATI" {
-            isM5CAN = upperResponse.contains("M5CAN")
+            // Do not downgrade an already identified M5CAN because a later
+            // metadata probe is blank, fails, or claims generic ELM identity.
+            // Only an explicit peer disconnect/replacement resets identity.
+            isM5CAN = isM5CAN || upperResponse.contains("M5CAN")
             negotiatedM5CAN = nil
             lastM5CANLeaseRenewal = nil
         } else if upperResponse.contains("M5CAN") {
