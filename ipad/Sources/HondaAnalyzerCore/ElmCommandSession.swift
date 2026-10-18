@@ -288,10 +288,23 @@ public final class ElmCommandSession {
 
         // Device identity must not persist after changing BLE adapters.
         // A fresh ATZ/ATI identifies the currently connected hardware.
-        if upperCommand == "ATZ" || upperCommand == "ATI" {
-            // Do not downgrade an already identified M5CAN because a later
-            // metadata probe is blank, fails, or claims generic ELM identity.
-            // Only an explicit peer disconnect/replacement resets identity.
+        if upperCommand == "ATZ" {
+            // A fresh successful hardware reset/identity reply may identify
+            // an ELM327/KW905 after the BLE peripheral changes. Preserve
+            // legacy ATZ-based replacement detection without retaining an
+            // old M5CAN lease or capability.
+            if upperResponse.contains("M5CAN") {
+                isM5CAN = true
+            } else if result.success && upperResponse.contains("ELM327") {
+                isM5CAN = false
+                m5canCapabilitiesRejected = false
+                m5canCapabilityRejectionReason = nil
+            }
+            negotiatedM5CAN = nil
+            lastM5CANLeaseRenewal = nil
+        } else if upperCommand == "ATI" {
+            // ATI failures or generic replies must not override the M5CAN
+            // identity just observed by ATZ within this initialization.
             isM5CAN = isM5CAN || upperResponse.contains("M5CAN")
             negotiatedM5CAN = nil
             lastM5CANLeaseRenewal = nil
