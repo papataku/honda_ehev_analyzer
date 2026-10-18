@@ -100,6 +100,9 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
             XCTAssertTrue(session.identifiesAsM5CAN)
             XCTAssertNil(session.negotiatedM5CAN)
             XCTAssertTrue(session.m5canCapabilitiesRejected, reply)
+            XCTAssertEqual(session.m5canCapabilityRejectionReason,
+                           reply.contains("M5CAN-CAPS")
+                             ? "caps_unrecognized" : "caps_unexpected_reply")
 
             let before = fake.commands.count
             for command in ["010C", "222012", "ATM5B01:2012", "ATM5TX1"] {
@@ -152,6 +155,7 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         _ = await session.initialize()
         XCTAssertTrue(session.identifiesAsM5CAN)
         XCTAssertTrue(session.m5canCapabilitiesRejected)
+        XCTAssertEqual(session.m5canCapabilityRejectionReason, "ati_failed")
         XCTAssertNil(session.negotiatedM5CAN)
         XCTAssertFalse(fake.commands.contains("ATM5CAP"))
         let count = fake.commands.count
@@ -173,6 +177,7 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         XCTAssertTrue(session.identifiesAsM5CAN)
         XCTAssertNil(session.negotiatedM5CAN)
         XCTAssertTrue(session.m5canCapabilitiesRejected)
+        XCTAssertEqual(session.m5canCapabilityRejectionReason, "caps_timeout_or_io_error")
         let count = transport.commands.count
         XCTAssertEqual(transport.commands.last, "ATM5CAP")
         do {
@@ -201,6 +206,7 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         _ = await session.initialize()
         XCTAssertTrue(session.identifiesAsM5CAN)
         XCTAssertFalse(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.m5canCapabilityRejectionReason)
         XCTAssertNil(session.negotiatedM5CAN)
         _ = try await session.command("010C")
         XCTAssertEqual(Array(fake.commands.suffix(2)), ["ATM5TX1", "010C"])
@@ -212,6 +218,7 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         XCTAssertTrue(session.m5canCapabilitiesRejected)
         session.resetProtocolNegotiation()
         XCTAssertFalse(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.m5canCapabilityRejectionReason)
         fake.capability = "?"
         _ = await session.initialize()
         XCTAssertFalse(session.m5canCapabilitiesRejected)
