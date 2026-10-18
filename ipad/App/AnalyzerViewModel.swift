@@ -378,7 +378,7 @@ final class AnalyzerViewModel: ObservableObject {
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(sessionID: sid, at: Date(),
                                    kind: "M5CAN_PROTOCOL_REJECTED",
-                                   note: "unsupported_or_timed_out_caps; vehicle_tx_blocked")
+                                   note: "reason=\(session.m5canCapabilityRejectionReason ?? "unspecified") vehicle_tx_blocked=true")
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
