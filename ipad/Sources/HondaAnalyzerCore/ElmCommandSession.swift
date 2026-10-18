@@ -29,6 +29,7 @@ public enum ElmCommandError: LocalizedError {
     case m5canLeaseFailed(String)
     case dedicatedModeUnavailable
     case m5canPassiveTransmitDisabled
+    case m5canUnrecognizedCapabilities
     case adapterChanged
 
     public var errorDescription: String? {
@@ -45,6 +46,8 @@ public enum ElmCommandError: LocalizedError {
             return "M5CAN専用通信に未対応のファームウェアです"
         case .m5canPassiveTransmitDisabled:
             return "M5CAN 1.2実験ビルドはCAN送信無効です。車両診断を開始できません"
+        case .m5canUnrecognizedCapabilities:
+            return "M5CANの能力応答が未対応または不正です。安全のため車両診断を停止しました"
         case .adapterChanged:
             return "BLE接続先が変更されました"
         }
@@ -86,6 +89,9 @@ public final class ElmCommandSession {
     /// restricted, never fall through to arbitrary ELM physical ECU routing.
     public var identifiesAsM5CAN: Bool { isM5CAN }
     public private(set) var negotiatedM5CAN: M5CANCapabilities?
+    /// A structurally advertised but malformed/unsupported capability is
+    /// NOT legacy firmware. Never fall back to generic ELM transmission.
+    public private(set) var m5canCapabilitiesRejected = false
     private var lastM5CANLeaseRenewal: Date?
     private let m5canLeaseRefreshSeconds: TimeInterval = 2.0
 
@@ -100,6 +106,7 @@ public final class ElmCommandSession {
     public func resetProtocolNegotiation() {
         isM5CAN = false
         negotiatedM5CAN = nil
+        m5canCapabilitiesRejected = false
         lastM5CANLeaseRenewal = nil
         framer.reset()
         if let current = pending {
@@ -114,9 +121,15 @@ public final class ElmCommandSession {
 
         let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let compact = normalized.uppercased().filter { !$0.isWhitespace }
+        let vehicleCommand = !compact.hasPrefix("AT") ||
+            compact.hasPrefix("ATM5B") ||
+            compact.hasPrefix("ATM5R") ||
+            compact.hasPrefix("ATM5TX")
+        if m5canCapabilitiesRejected && vehicleCommand {
+            throw ElmCommandError.m5canUnrecognizedCapabilities
+        }
         if negotiatedM5CAN?.isPassiveDiagnosticBench == true &&
-            (!compact.hasPrefix("AT") || compact.hasPrefix("ATM5B") ||
-             compact.hasPrefix("ATM5R") || compact.hasPrefix("ATM5TX")) {
+            vehicleCommand {
             throw ElmCommandError.m5canPassiveTransmitDisabled
         }
 
@@ -152,9 +165,24 @@ public final class ElmCommandSession {
         // Legacy M5CAN, an incompatible future protocol, and all KW905
         // devices continue using the normal ELM request/response path.
         if isM5CAN && results.last(where: { $0.command == "ATI" })?.success == true {
-            if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0),
-               reply.success {
-                negotiatedM5CAN = M5CANCapabilities.parse(reply.text)
+            if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
+                let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
+                if let parsed {
+                    negotiatedM5CAN = parsed
+                } else {
+                    // A declared M5CAN-CAPS response must not silently fall
+                    // back to legacy ELM commands when the protocol/fields
+                    // are unknown. '?' / ERROR (unsupported command) is the
+                    // explicit legacy behavior. Other successful replies to
+                    // ATM5CAP are also incompatible, not proof of legacy.
+                    let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .uppercased()
+                    let legacyUnsupported = ["?", "ERROR", "NO DATA"].contains(value)
+                    m5canCapabilitiesRejected = value.contains("M5CAN-CAPS") ||
+                        (reply.success && !legacyUnsupported)
+                }
             }
         }
         return results
@@ -163,6 +191,9 @@ public final class ElmCommandSession {
     public func batchRead(
         group: M5CANBatchGroup, ids: [String], timeout: TimeInterval = 8.0
     ) async throws -> (ElmCommandResult, M5CANBatchResponse) {
+        if m5canCapabilitiesRejected {
+            throw ElmCommandError.m5canUnrecognizedCapabilities
+        }
         if negotiatedM5CAN?.isPassiveDiagnosticBench == true {
             throw ElmCommandError.m5canPassiveTransmitDisabled
         }
