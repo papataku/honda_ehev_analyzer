@@ -234,7 +234,8 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         XCTAssertTrue(session.negotiatedM5CAN?.isPassiveDiagnosticBench == true)
 
         for metadata in ["ATI", "ATZ"] {
-            XCTAssertTrue((try await session.command(metadata)).success)
+            let identity = try await session.command(metadata)
+            XCTAssertTrue(identity.success)
             XCTAssertTrue(session.identifiesAsM5CAN)
             XCTAssertNil(session.negotiatedM5CAN)
             XCTAssertTrue(session.m5canCapabilitiesRejected)
@@ -259,7 +260,8 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
         // A response that claims ELM327 is not permission to downgrade an
         // already identified M5CAN on the same BLE connection generation.
         fake.atzIdentity = "ELM327 v1.5"
-        XCTAssertTrue((try await session.command("ATZ")).success)
+        let spoofedATZ = try await session.command("ATZ")
+        XCTAssertTrue(spoofedATZ.success)
         XCTAssertTrue(session.identifiesAsM5CAN)
         XCTAssertNil(session.negotiatedM5CAN)
         XCTAssertTrue(session.m5canCapabilitiesRejected)
