@@ -84,6 +84,9 @@ public final class ElmCommandSession {
     private var pending: Pending?
 
     private var isM5CAN = false
+    // Sticky for one BLE connection: a negotiated M5CAN cannot downgrade
+    // itself to bare '?' legacy mode without a verified disconnect/reset.
+    private var negotiatedM5CANInThisConnection = false
     /// ATI/ATZ device identity is independent of optional capability support.
     /// An identified M5CAN with an invalid/older handshake must remain
     /// restricted, never fall through to arbitrary ELM physical ECU routing.
@@ -108,6 +111,7 @@ public final class ElmCommandSession {
     /// capabilities from an earlier adapter, even if it has the same name.
     public func resetProtocolNegotiation() {
         isM5CAN = false
+        negotiatedM5CANInThisConnection = false
         negotiatedM5CAN = nil
         m5canCapabilitiesRejected = false
         m5canCapabilityRejectionReason = nil
@@ -116,6 +120,18 @@ public final class ElmCommandSession {
         if let current = pending {
             pending = nil
             current.continuation.resume(throwing: ElmCommandError.adapterChanged)
+        }
+    }
+
+    /// Starting a new recording is NOT a BLE disconnect. Retain device
+    /// identity and the strongest protocol seen on the current connection.
+    /// No CAN-bound request is allowed until a fresh handshake completes.
+    public func invalidateCapabilitiesForNewCapture() {
+        negotiatedM5CAN = nil
+        lastM5CANLeaseRenewal = nil
+        if isM5CAN {
+            m5canCapabilitiesRejected = true
+            m5canCapabilityRejectionReason = "caps_renegotiation_required"
         }
     }
 
@@ -149,8 +165,11 @@ public final class ElmCommandSession {
     }
 
     public func initialize() async -> [ElmCommandResult] {
-        // Do not carry identity/capabilities across BLE connections.
-        resetProtocolNegotiation()
+        // initialize() can be invoked more than once on one BLE link.
+        // Only an actual disconnect/peripheral replacement may erase the
+        // previously identified M5CAN and its anti-downgrade latch.
+        invalidateCapabilitiesForNewCapture()
+        framer.reset()
         var results: [ElmCommandResult] = []
         for command in elmInitCommands + elmMetaCommands {
             do {
@@ -180,6 +199,7 @@ public final class ElmCommandSession {
                     let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
                     if let parsed {
                         negotiatedM5CAN = parsed
+                        negotiatedM5CANInThisConnection = true
                         m5canCapabilitiesRejected = false
                         m5canCapabilityRejectionReason = nil
                     } else {
@@ -190,10 +210,12 @@ public final class ElmCommandSession {
                         // Older M5CAN models explicitly reject unknown AT
                         // commands. Only these exact tokens enable legacy ELM
                         // read-only commands; a malformed CAPS or "OK" cannot.
-                        m5canCapabilitiesRejected = !["?", "ERROR", "NO DATA"].contains(value)
+                        let explicitLegacy = ["?", "ERROR", "NO DATA"].contains(value)
+                        m5canCapabilitiesRejected = !explicitLegacy || negotiatedM5CANInThisConnection
                         m5canCapabilityRejectionReason = m5canCapabilitiesRejected
-                            ? (value.contains("M5CAN-CAPS")
-                                ? "caps_unrecognized" : "caps_unexpected_reply")
+                            ? (explicitLegacy ? "caps_downgrade_requires_reconnect"
+                               : (value.contains("M5CAN-CAPS")
+                                  ? "caps_unrecognized" : "caps_unexpected_reply"))
                             : nil
                     }
                 }
