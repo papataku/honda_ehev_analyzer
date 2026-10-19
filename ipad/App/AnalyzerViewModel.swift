@@ -547,7 +547,7 @@ final class AnalyzerViewModel: ObservableObject {
                                            note: observedEcus.map(\.source).joined(separator: ","))
                             let unsupported = observedEcus.filter {
                                 !PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction)
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction)
                             }
                             if !unsupported.isEmpty {
                                 store.addEvent(sessionID: sid, at: Date(),
@@ -661,7 +661,7 @@ final class AnalyzerViewModel: ObservableObject {
                         case .stationaryUnknownDID:
                             let sources = observedEcus.filter {
                                 PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction
                                 )
                             }.map(\.source)
                             if !sources.isEmpty {
