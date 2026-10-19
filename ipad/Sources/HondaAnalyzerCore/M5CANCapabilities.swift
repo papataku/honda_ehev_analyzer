@@ -12,6 +12,9 @@ public struct M5CANCapabilities: Equatable, Sendable {
     /// Untrusted adapter claim, NOT permission for host CAN diagnostic TX.
     /// Only a separately reviewed command/safety policy may use this list.
     public let advertisedPhysicalUDSEcus: Set<String>
+    /// Protocol 1.2 bench advertises observed ECU routing but TX=OFF.
+    /// Never treat advertised ECU addresses as permission to send CAN.
+    public let isPassiveDiagnosticBench: Bool
     public let supportsStreaming: Bool
     /// M5CAN itself grants a short-lived TX permit for each validated request.
     /// Older firmware without LEASE=IMPLICIT still needs ATM5TX1.
@@ -62,6 +65,14 @@ public struct M5CANCapabilities: Equatable, Sendable {
             return nil
         }
         let ops = Set(opsText.split(separator: ",").map(String.init))
+        // Version 1.2 is currently *only* implemented by the safe passive
+        // routing bench. Unknown TX modes or absent TX=OFF fail closed.
+        // 1.0/1.1 must not advertise a 1.2-only TX field.
+        if minor >= 2 {
+            guard fields["TX"] == "OFF" else { return nil }
+        } else if fields["TX"] != nil {
+            return nil
+        }
         // Protocol 1.x may add new optional operations. Ignore features we
         // do not understand; activate only explicitly known capabilities.
         guard ops.contains("OBD01") || ops.contains("UDS22") else { return nil }
@@ -95,6 +106,7 @@ public struct M5CANCapabilities: Equatable, Sendable {
             maxBatchIDs: batch, supportsOBD01: ops.contains("OBD01"),
             supportsUDS22: ops.contains("UDS22"),
             advertisedPhysicalUDSEcus: claimedECUs,
+            isPassiveDiagnosticBench: minor >= 2,
             supportsStreaming: stream == "1",
             usesImplicitLease: leaseMode == "IMPLICIT"
         )

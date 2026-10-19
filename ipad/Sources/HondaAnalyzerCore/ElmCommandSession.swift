@@ -28,6 +28,8 @@ public enum ElmCommandError: LocalizedError {
     case unsafeCommand(String)
     case m5canLeaseFailed(String)
     case dedicatedModeUnavailable
+    case m5canPassiveTransmitDisabled
+    case m5canUnrecognizedCapabilities
     case adapterChanged
 
     public var errorDescription: String? {
@@ -42,6 +44,10 @@ public enum ElmCommandError: LocalizedError {
             return "M5CAN TX lease could not be acquired: \(response)"
         case .dedicatedModeUnavailable:
             return "M5CAN専用通信に未対応のファームウェアです"
+        case .m5canPassiveTransmitDisabled:
+            return "M5CAN 1.2実験ビルドはCAN送信無効です。車両診断を開始できません"
+        case .m5canUnrecognizedCapabilities:
+            return "M5CANの能力応答が未対応または不正です。安全のため車両診断を停止しました"
         case .adapterChanged:
             return "BLE接続先が変更されました"
         }
@@ -78,11 +84,20 @@ public final class ElmCommandSession {
     private var pending: Pending?
 
     private var isM5CAN = false
+    // Sticky for one BLE connection: a negotiated M5CAN cannot downgrade
+    // itself to bare '?' legacy mode without a verified disconnect/reset.
+    private var negotiatedM5CANInThisConnection = false
     /// ATI/ATZ device identity is independent of optional capability support.
     /// An identified M5CAN with an invalid/older handshake must remain
     /// restricted, never fall through to arbitrary ELM physical ECU routing.
     public var identifiesAsM5CAN: Bool { isM5CAN }
     public private(set) var negotiatedM5CAN: M5CANCapabilities?
+    /// A structurally advertised but malformed/unsupported capability is
+    /// NOT legacy firmware. Never fall back to generic ELM transmission.
+    public private(set) var m5canCapabilitiesRejected = false
+    /// Stable diagnostic evidence for SQLite; no private adapter response
+    /// bytes are required to distinguish timeout, bad identity or syntax.
+    public private(set) var m5canCapabilityRejectionReason: String?
     private var lastM5CANLeaseRenewal: Date?
     private let m5canLeaseRefreshSeconds: TimeInterval = 2.0
 
@@ -96,7 +111,10 @@ public final class ElmCommandSession {
     /// capabilities from an earlier adapter, even if it has the same name.
     public func resetProtocolNegotiation() {
         isM5CAN = false
+        negotiatedM5CANInThisConnection = false
         negotiatedM5CAN = nil
+        m5canCapabilitiesRejected = false
+        m5canCapabilityRejectionReason = nil
         lastM5CANLeaseRenewal = nil
         framer.reset()
         if let current = pending {
@@ -105,11 +123,35 @@ public final class ElmCommandSession {
         }
     }
 
+    /// Starting a new recording is NOT a BLE disconnect. Retain device
+    /// identity and the strongest protocol seen on the current connection.
+    /// No CAN-bound request is allowed until a fresh handshake completes.
+    public func invalidateCapabilitiesForNewCapture() {
+        negotiatedM5CAN = nil
+        lastM5CANLeaseRenewal = nil
+        if isM5CAN {
+            m5canCapabilitiesRejected = true
+            m5canCapabilityRejectionReason = "caps_renegotiation_required"
+        }
+    }
+
     public func command(_ command: String, timeout: TimeInterval = 5.0) async throws -> ElmCommandResult {
         guard pending == nil else { throw ElmCommandError.busy }
         guard isReadOnlyVehicleCommand(command) else { throw ElmCommandError.unsafeCommand(command) }
 
         let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = normalized.uppercased().filter { !$0.isWhitespace }
+        let vehicleCommand = !compact.hasPrefix("AT") ||
+            compact.hasPrefix("ATM5B") ||
+            compact.hasPrefix("ATM5R") ||
+            compact.hasPrefix("ATM5TX")
+        if m5canCapabilitiesRejected && vehicleCommand {
+            throw ElmCommandError.m5canUnrecognizedCapabilities
+        }
+        if negotiatedM5CAN?.isPassiveDiagnosticBench == true &&
+            vehicleCommand {
+            throw ElmCommandError.m5canPassiveTransmitDisabled
+        }
 
         if shouldRenewM5CANLease(before: normalized) {
             let lease = try await sendCommand("ATM5TX1", timeout: min(timeout, 2.0))
@@ -123,8 +165,11 @@ public final class ElmCommandSession {
     }
 
     public func initialize() async -> [ElmCommandResult] {
-        // Do not carry identity/capabilities across BLE connections.
-        resetProtocolNegotiation()
+        // initialize() can be invoked more than once on one BLE link.
+        // Only an actual disconnect/peripheral replacement may erase the
+        // previously identified M5CAN and its anti-downgrade latch.
+        invalidateCapabilitiesForNewCapture()
+        framer.reset()
         var results: [ElmCommandResult] = []
         for command in elmInitCommands + elmMetaCommands {
             do {
@@ -139,13 +184,41 @@ public final class ElmCommandSession {
                 ))
             }
         }
-        // Capability discovery is optional and only sent to verified M5CAN.
-        // Legacy M5CAN, an incompatible future protocol, and all KW905
-        // devices continue using the normal ELM request/response path.
-        if isM5CAN && results.last(where: { $0.command == "ATI" })?.success == true {
-            if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0),
-               reply.success {
-                negotiatedM5CAN = M5CANCapabilities.parse(reply.text)
+        // Capability discovery is only sent after M5CAN identification.
+        // An explicit legacy unsupported reply keeps older ELM behavior,
+        // whereas unknown/malformed future CAPS and timeouts fail closed.
+        // KW905 never receives the M5CAN-specific probe.
+        if isM5CAN {
+            // An ATI failure (or a silent CAPS query) is not proof that
+            // the M5CAN identified by ATZ is an ordinary ELM adapter.
+            m5canCapabilitiesRejected = true
+            m5canCapabilityRejectionReason = "ati_failed"
+            if results.last(where: { $0.command == "ATI" })?.success == true {
+                m5canCapabilityRejectionReason = "caps_timeout_or_io_error"
+                if let reply = try? await sendCommand("ATM5CAP", timeout: 2.0) {
+                    let parsed = reply.success ? M5CANCapabilities.parse(reply.text) : nil
+                    if let parsed {
+                        negotiatedM5CAN = parsed
+                        negotiatedM5CANInThisConnection = true
+                        m5canCapabilitiesRejected = false
+                        m5canCapabilityRejectionReason = nil
+                    } else {
+                        let value = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: ">"))
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .uppercased()
+                        // Older M5CAN models explicitly reject unknown AT
+                        // commands. Only these exact tokens enable legacy ELM
+                        // read-only commands; a malformed CAPS or "OK" cannot.
+                        let explicitLegacy = ["?", "ERROR", "NO DATA"].contains(value)
+                        m5canCapabilitiesRejected = !explicitLegacy || negotiatedM5CANInThisConnection
+                        m5canCapabilityRejectionReason = m5canCapabilitiesRejected
+                            ? (explicitLegacy ? "caps_downgrade_requires_reconnect"
+                               : (value.contains("M5CAN-CAPS")
+                                  ? "caps_unrecognized" : "caps_unexpected_reply"))
+                            : nil
+                    }
+                }
             }
         }
         return results
@@ -154,6 +227,12 @@ public final class ElmCommandSession {
     public func batchRead(
         group: M5CANBatchGroup, ids: [String], timeout: TimeInterval = 8.0
     ) async throws -> (ElmCommandResult, M5CANBatchResponse) {
+        if m5canCapabilitiesRejected {
+            throw ElmCommandError.m5canUnrecognizedCapabilities
+        }
+        if negotiatedM5CAN?.isPassiveDiagnosticBench == true {
+            throw ElmCommandError.m5canPassiveTransmitDisabled
+        }
         guard let cap = negotiatedM5CAN,
               (group == .mode01 ? cap.supportsOBD01 : cap.supportsUDS22),
               let command = group.command(ids: ids, capacity: cap.maxBatchIDs)
@@ -229,12 +308,22 @@ public final class ElmCommandSession {
         let upperResponse = response.text.uppercased()
         let upperCommand = current.command.uppercased().filter { !$0.isWhitespace }
 
-        // Device identity must not persist after changing BLE adapters.
-        // A fresh ATZ/ATI identifies the currently connected hardware.
+        // BLE peripheral replacement explicitly calls
+        // resetProtocolNegotiation(). A generic ATZ/ATI reply on this SAME
+        // link must not downgrade a previously identified M5CAN to ELM.
         if upperCommand == "ATZ" || upperCommand == "ATI" {
-            isM5CAN = upperResponse.contains("M5CAN")
+            if upperResponse.contains("M5CAN") {
+                isM5CAN = true
+            }
             negotiatedM5CAN = nil
             lastM5CANLeaseRenewal = nil
+            // ATZ/ATI invalidates version and TX=OFF capability negotiation.
+            // Until initialize() runs a fresh M5CAN-CAPS exchange, fail closed
+            // on CAN-bound commands. Metadata AT commands remain available.
+            if isM5CAN {
+                m5canCapabilitiesRejected = true
+                m5canCapabilityRejectionReason = "caps_renegotiation_required"
+            }
         } else if upperResponse.contains("M5CAN") {
             isM5CAN = true
         }
