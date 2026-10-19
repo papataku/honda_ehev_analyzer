@@ -227,6 +227,59 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testManualATZATIRevokeCapabilitiesAndPreserveSameLinkIdentity() async throws {
+        let fake = PassiveM5CANFake()
+        let session = ElmCommandSession(transport: fake)
+        _ = await session.initialize()
+        XCTAssertTrue(session.negotiatedM5CAN?.isPassiveDiagnosticBench == true)
+
+        for metadata in ["ATI", "ATZ"] {
+            XCTAssertTrue((try await session.command(metadata)).success)
+            XCTAssertTrue(session.identifiesAsM5CAN)
+            XCTAssertNil(session.negotiatedM5CAN)
+            XCTAssertTrue(session.m5canCapabilitiesRejected)
+            XCTAssertEqual(session.m5canCapabilityRejectionReason,
+                           "caps_renegotiation_required")
+            let priorWrites = fake.commands.count
+            for cmd in ["010C", "ATM5B00:010C", "ATM5TX1"] {
+                do {
+                    _ = try await session.command(cmd)
+                    XCTFail("Manual identity command must revoke vehicle capability")
+                } catch ElmCommandError.m5canUnrecognizedCapabilities {
+                    // Zero additional BLE or lease writes.
+                } catch {
+                    XCTFail("Unexpected error: \\(error)")
+                }
+            }
+            XCTAssertEqual(fake.commands.count, priorWrites)
+            _ = await session.initialize()
+            XCTAssertTrue(session.negotiatedM5CAN?.isPassiveDiagnosticBench == true)
+        }
+
+        // A response that claims ELM327 is not permission to downgrade an
+        // already identified M5CAN on the same BLE connection generation.
+        fake.atzIdentity = "ELM327 v1.5"
+        XCTAssertTrue((try await session.command("ATZ")).success)
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        let priorWrites = fake.commands.count
+        do {
+            _ = try await session.command("010D")
+            XCTFail("ELM-like ATZ must not bypass TX=OFF")
+        } catch ElmCommandError.m5canUnrecognizedCapabilities {
+            // Expected.
+        }
+        XCTAssertEqual(fake.commands.count, priorWrites)
+
+        // A proven BLE disconnect / replacement is the sole identity reset.
+        session.resetProtocolNegotiation()
+        XCTAssertFalse(session.identifiesAsM5CAN)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+    }
+
+    @MainActor
     func testLegacyNormalM5CAN1Point1RemainsParseable() throws {
         let response = "M5CAN-CAPS PROTO=1.1 FW=0.4.4 BATCH=16 " +
             "OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT"
