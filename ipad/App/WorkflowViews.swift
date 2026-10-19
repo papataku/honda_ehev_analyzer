@@ -58,7 +58,8 @@ struct SessionWorkflowPanel: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .disabled(model.isBusy || model.isDidScanning || model.isDriveCollecting || model.isLivePolling)
+                        .disabled(model.isBusy || model.isDidScanning || model.isDriveCollecting ||
+                                  (model.isLivePolling && nextActionButtonTitle != "表示を停止"))
                     }
                 }
             }
@@ -114,7 +115,11 @@ struct SessionWorkflowPanel: View {
         if !model.isRecording { return "セッション記録を開始" }
         if !model.elmInitialized { return "車両通信を初期化" }
         if !model.knownSignalsValidated { return "既知信号を1回確認" }
-        return "準備完了。目的に応じてモードを選択"
+        if model.isUnifiedCollecting { return "統合収集中：ライブと探索は自動で切替わります" }
+        if model.isLivePolling { return "ライブ取得中。終えたら表示を停止して記録を終了" }
+        if model.isStandardPIDSurveying { return "標準PIDの対応状況と実応答を調査中" }
+        if model.isDriveCollecting { return "走行解析で収集中。安全な場所で停止して保存" }
+        return "準備完了。目的に応じて下のモードを選択"
     }
 
     private var nextActionDetail: String {
@@ -130,7 +135,11 @@ struct SessionWorkflowPanel: View {
         if !model.knownSignalsValidated {
             return "RPM・車速・水温・SOC・HV電圧/電流が読めることを確認します。"
         }
-        return "次は下の3つから目的を選んでください。モーター回転数を調べるなら「走行解析」です。"
+        if model.isUnifiedCollecting { return "画面操作は不要です。変化した信号は自動でグラフ化します。終了時は統合収集停止→SQLite記録終了→共有。" }
+        if model.isLivePolling { return "SQLite記録は続いています。表示を停止したあと、ページ下部の「SQLite記録を終了」→共有へ進みます。" }
+        if model.isStandardPIDSurveying { return "この間は別の取得操作は実行できません。画面の調査状況を確認してください。" }
+        if model.isDriveCollecting { return "走行中は運転に集中してください。操作は同乗者または安全に駐車してから行ってください。" }
+        return "下から「車両データを見る」「走行解析」「未知DID探索」「標準PID調査」を選んでください。記録だけでは信号の収集は始まりません。"
     }
 
     private var nextActionSymbol: String {
@@ -146,6 +155,8 @@ struct SessionWorkflowPanel: View {
         if !model.isRecording { return "記録開始" }
         if !model.elmInitialized { return "通信初期化" }
         if !model.knownSignalsValidated { return "信号確認" }
+        if model.isUnifiedCollecting { return "統合収集を停止" }
+        if model.isLivePolling { return "表示を停止" }
         return nil
     }
 
@@ -158,6 +169,10 @@ struct SessionWorkflowPanel: View {
             model.initializeELM()
         } else if !model.knownSignalsValidated {
             model.readKnownSignals()
+        } else if model.isUnifiedCollecting {
+            model.stopUnifiedCollection()
+        } else if model.isLivePolling {
+            model.stopLivePolling()
         }
     }
 }
@@ -246,6 +261,7 @@ struct OperationModeCards: View {
     @ObservedObject var model: AnalyzerViewModel
     let onOpenDriving: () -> Void
     let onOpenDiscovery: () -> Void
+    let onOpenStandardPID: () -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 250), spacing: 12)]
 
@@ -253,11 +269,46 @@ struct OperationModeCards: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("何をしたいですか？")
                 .font(.title2.bold())
-            Text("目的を選ぶだけで進められます。信号の意味を調べたい場合は「走行解析」、新しい信号を探したい場合は「DID探索」です。")
+            Text("SQLite記録開始だけでは信号は収集されません。以下から目的を選んでください。標準PIDを広く調べたい場合は「標準PID調査」です。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             LazyVGrid(columns: columns, spacing: 12) {
+                AnalyzerCard("おすすめ：統合自動収集", systemImage: "waveform.path.ecg.rectangle") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("走行中は既知の読み取り専用信号を取得します。未知DIDの探索は安全に駐車し、車速0が5秒以上安定し、Pレンジを手動確認した場合にだけ行います。")
+                            .font(.callout)
+                        Toggle("安全な場所で停車し、Pレンジに入れたことを確認", isOn: $model.stationaryConfirmed)
+                            .font(.subheadline)
+                            .accessibilityHint("車速0だけではPレンジを判定できません。停車して実際にPへ入れた場合のみONにしてください。")
+                        Text("走行検出・通信切断時にP確認は解除されます。再び未知DIDを探す場合は駐車後に確認し直してください。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if model.isUnifiedCollecting {
+                            StatusPill(text: "統合収集中", systemImage: "record.circle", style: .active)
+                            Text(model.unifiedStage)
+                                .font(.subheadline.weight(.semibold))
+                            Text("標準PID \(model.unifiedStandardProbes)件 / 未知DID \(model.unifiedUnknownProbes)件")
+                                .font(.caption.monospacedDigit())
+                            Button("統合収集を停止", role: .destructive) {
+                                model.stopUnifiedCollection()
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button {
+                                model.startUnifiedCollection()
+                            } label: {
+                                Label("統合収集を開始", systemImage: "play.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!ready || model.isBusy || model.isLivePolling ||
+                                      model.isDriveCollecting || model.isDidScanning ||
+                                      model.isStandardPIDSurveying)
+                        }
+                    }
+                }
+
                 AnalyzerCard("1. 車両データを見る", systemImage: "gauge.with.dots.needle.50percent") {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("RPM・車速・水温・SOC・HV電力をリアルタイム表示。未知DIDにはアクセスしません。")
@@ -271,12 +322,12 @@ struct OperationModeCards: View {
                         }
                         .pickerStyle(.menu)
                         .disabled(model.isLivePolling || model.livePollingUnthrottled)
-                        Text("現在の設定：\(Int(model.livePollingRequestRateHz)) req/s。5種類の値を順に読むため、5 req/sでは各値が約1秒ごとの更新目標です。")
+                        Text("設定：\(Int(model.livePollingRequestRateHz)) req/s。基本の5 PIDに加え、標準PID画面で選んだ最大4 PIDを巡回します。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if model.isLivePolling {
                             StatusPill(text: "表示中", systemImage: "waveform.path.ecg", style: .good)
-                            Text(String(format: "目標 %.0f / 実効 %.1f req/s", model.livePollingRequestRateHz, model.liveEffectiveRequestRateHz))
+                            Text(String(format: "ELM %.1f req/s ・ PID %.1f 件/s ・ 一括 %d 件", model.liveEffectiveRequestRateHz, model.liveEffectivePIDRateHz, model.liveLastBatchSize))
                                 .font(.caption.monospacedDigit())
                             Button("表示を停止", role: .destructive) {
                                 model.stopLivePolling()
@@ -290,7 +341,8 @@ struct OperationModeCards: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!ready || model.isDriveCollecting || model.isDidScanning || model.isBusy)
+                            .disabled(!ready || model.isDriveCollecting || model.isDidScanning ||
+                                      model.isUnifiedCollecting || model.isBusy)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -314,6 +366,24 @@ struct OperationModeCards: View {
                         .buttonStyle(.bordered)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                AnalyzerCard("4. 標準PIDを調べる", systemImage: "list.bullet.rectangle") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("車両が対応する標準OBD項目を調べ、取得できたデータと換算式を一覧で確認します。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("対応確認とライブ追加項目選択、CSV・JSON共有ができます。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            onOpenStandardPID()
+                        } label: {
+                            Label("標準PID調査を開く", systemImage: "arrow.right.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
 
                 AnalyzerCard("3. 未知の信号を探す", systemImage: "magnifyingglass.circle") {
@@ -386,7 +456,7 @@ struct SessionExportPanel: View {
                     .font(.headline)
 
                 if model.isRecording {
-                    if model.isLivePolling || model.isDidScanning || model.isDriveCollecting || model.isBusy {
+                    if model.isLivePolling || model.isDidScanning || model.isDriveCollecting || model.isUnifiedCollecting || model.isBusy {
                         Text("取得処理を停止してからSQLite記録を終了してください。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -400,7 +470,8 @@ struct SessionExportPanel: View {
                         model.stopRecording()
                     }
                     .buttonStyle(.bordered)
-                    .disabled(model.isLivePolling || model.isDidScanning || model.isDriveCollecting || model.isBusy)
+                    .disabled(model.isLivePolling || model.isDidScanning || model.isDriveCollecting ||
+                              model.isUnifiedCollecting || model.isBusy)
                 } else if let url = model.recordingURL {
                     Text("記録は正常終了しています。Macでの詳細解析や共有用にSQLiteを渡せます。")
                         .font(.caption)

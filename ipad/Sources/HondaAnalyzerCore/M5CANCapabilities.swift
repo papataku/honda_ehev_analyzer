@@ -9,6 +9,12 @@ public struct M5CANCapabilities: Equatable, Sendable {
     public let maxBatchIDs: Int
     public let supportsOBD01: Bool
     public let supportsUDS22: Bool
+    /// Untrusted adapter claim, NOT permission for host CAN diagnostic TX.
+    /// Only a separately reviewed command/safety policy may use this list.
+    public let advertisedPhysicalUDSEcus: Set<String>
+    /// Protocol 1.2 bench advertises observed ECU routing but TX=OFF.
+    /// Never treat advertised ECU addresses as permission to send CAN.
+    public let isPassiveDiagnosticBench: Bool
     public let supportsStreaming: Bool
     /// M5CAN itself grants a short-lived TX permit for each validated request.
     /// Older firmware without LEASE=IMPLICIT still needs ATM5TX1.
@@ -59,13 +65,48 @@ public struct M5CANCapabilities: Equatable, Sendable {
             return nil
         }
         let ops = Set(opsText.split(separator: ",").map(String.init))
+        // Version 1.2 is currently *only* implemented by the safe passive
+        // routing bench. Unknown TX modes or absent TX=OFF fail closed.
+        // 1.0/1.1 must not advertise a 1.2-only TX field.
+        if minor >= 2 {
+            guard fields["TX"] == "OFF" else { return nil }
+        } else if fields["TX"] != nil {
+            return nil
+        }
         // Protocol 1.x may add new optional operations. Ignore features we
         // do not understand; activate only explicitly known capabilities.
         guard ops.contains("OBD01") || ops.contains("UDS22") else { return nil }
+
+        // Legacy 1.0/1.1 has ECU01-only UDS routing. A new allowlist field
+        // is invalid on those versions rather than silently being trusted.
+        let claimedECUs: Set<String>
+        if let list = fields["UDS_ECUS"] {
+            guard minor >= 2, ops.contains("UDS22") else { return nil }
+            let parts = list.split(separator: ",", omittingEmptySubsequences: false)
+            guard !parts.isEmpty, parts.count <= 16 else { return nil }
+            let values = parts.map(String.init)
+            guard values.allSatisfy({ value in
+                guard value.count == 2,
+                      value.uppercased() == value,
+                      let byte = UInt8(value, radix: 16)
+                else { return false }
+                // 00 is functional/broadcast; F1 is tester. Neither is
+                // an admissible physical ECU source in this protocol.
+                return byte != 0 && byte != 0xF1 && byte != 0xFF
+            }), Set(values).count == values.count,
+               values.contains("01")
+            else { return nil }
+            claimedECUs = Set(values)
+        } else {
+            // No advertised list never widens permissions.
+            claimedECUs = ops.contains("UDS22") ? ["01"] : []
+        }
         return M5CANCapabilities(
             major: major, minor: minor, firmwareVersion: firmware,
             maxBatchIDs: batch, supportsOBD01: ops.contains("OBD01"),
             supportsUDS22: ops.contains("UDS22"),
+            advertisedPhysicalUDSEcus: claimedECUs,
+            isPassiveDiagnosticBench: minor >= 2,
             supportsStreaming: stream == "1",
             usesImplicitLease: leaseMode == "IMPLICIT"
         )

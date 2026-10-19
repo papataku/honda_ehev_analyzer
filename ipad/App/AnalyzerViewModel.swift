@@ -6,6 +6,14 @@ import HondaAnalyzerCore
 final class AnalyzerViewModel: ObservableObject {
     let ble: KW905BLETransport
     private let session: ElmCommandSession
+    // A name hint only tightens access; never grants new CAN addresses.
+    private var m5canPhysicalECURestriction: Bool {
+        PhysicalUDS22Compatibility.restrictionApplies(
+            negotiatedM5CAN: session.negotiatedM5CAN != nil,
+            identifiedM5CAN: session.identifiesAsM5CAN,
+            adapterName: ble.connectedDeviceName
+        )
+    }
     private var captureStore: CaptureStore?
     private var captureSessionID: Int64?
     private var liveTask: Task<Void, Never>?
@@ -19,6 +27,22 @@ final class AnalyzerViewModel: ObservableObject {
     private var bleStateObservation: AnyCancellable?
 
     @Published var isBusy = false
+    @Published var standardPIDInventory = StandardPIDInventory()
+    @Published var isStandardPIDSurveying = false
+    @Published var standardPIDProgress = "未調査"
+    @Published var selectedExtraPIDs: Set<UInt8> = []
+    @Published var latestPIDCSVURL: URL?
+    @Published var latestPIDJSONURL: URL?
+    private var standardPIDTask: Task<Void, Never>?
+    private var unifiedTask: Task<Void, Never>?
+    private var signalChangeTracker = SignalChangeTracker()
+    @Published var changingSignals: [ObservedSignalTrend] = []
+    @Published var isUnifiedCollecting = false
+    @Published var unifiedStage = "未開始"
+    @Published var unifiedUnknownProbes = 0
+    @Published var unifiedStandardProbes = 0
+    @Published var unifiedZeroSeconds = 0.0
+
     @Published var vehicleProtocolLabel = "未確認（ELM327互換）"
     @Published var elmInitialized = false
     @Published var knownSignalsValidated = false
@@ -44,7 +68,9 @@ final class AnalyzerViewModel: ObservableObject {
     @Published var didScanEffectiveRateHz = 0.0
     @Published var livePollingRequestRateHz = 5.0
     @Published var livePollingUnthrottled = false
-    @Published var liveEffectiveRequestRateHz = 0.0
+    @Published var liveEffectiveRequestRateHz = 0.0 // actual ELM commands per second
+    @Published var liveEffectivePIDRateHz = 0.0 // logical Mode01 PID requests per second
+    @Published var liveLastBatchSize = 1
     @Published var didScanProgress = 0.0
     @Published var didScanCurrent = "未開始"
     @Published var didPositiveCount = 0
@@ -75,6 +101,13 @@ final class AnalyzerViewModel: ObservableObject {
         }
         bleStateObservation = transport.$state.sink { [weak self] state in
             guard let self else { return }
+            if self.isUnifiedCollecting &&
+               (state == "disconnected" || state == "connect-failed" ||
+                state == "gatt-error" || state == "bluetooth-unavailable") {
+                self.unifiedTask?.cancel()
+                self.unifiedStage = "BLE中断：統合収集を停止しました"
+                self.recordLifecycleEvent(kind: "UNIFIED_LINK_LOST", note: "state=\(state)")
+            }
             if state == "connecting" || state == "disconnected" ||
                 state == "connect-failed" || state == "gatt-error" ||
                 state == "bluetooth-unavailable" {
@@ -91,7 +124,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func startRecording() {
-        guard captureStore == nil, !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy else { return }
+        guard captureStore == nil, !isDidScanning, !isLivePolling, !isDriveCollecting,
+              !isUnifiedCollecting, !isBusy else { return }
         do {
             let documents = try FileManager.default.url(
                 for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -112,16 +146,26 @@ final class AnalyzerViewModel: ObservableObject {
             recordingFile = url.lastPathComponent
             isRecording = true
 
-            // Evidence-first workflow: communication readiness must be proven
-            // again inside every new capture session so initialization and
-            // known-signal evidence are present in that SQLite file.
-            session.resetProtocolNegotiation()
+            // Revalidate adapter capabilities for each SQLite capture, but
+            // starting a recording is not a BLE disconnect. Retain the M5CAN
+            // identity and strongest already-negotiated protocol on this link
+            // until initializeELM() has completed its fresh handshake.
+            session.invalidateCapabilitiesForNewCapture()
             vehicleProtocolLabel = "未確認（ELM327互換）"
             elmInitialized = false
             knownSignalsValidated = false
             stationaryConfirmed = false
             observedEcus = []
             liveSamples.removeAll()
+            signalChangeTracker = SignalChangeTracker()
+            changingSignals = []
+            unifiedStage = "未開始"
+            unifiedUnknownProbes = 0
+            unifiedStandardProbes = 0
+            standardPIDInventory = StandardPIDInventory()
+            latestPIDCSVURL = nil
+            latestPIDJSONURL = nil
+            standardPIDProgress = "未調査"
             statusMessage = "記録開始。次に車両通信を初期化してください"
             refreshPositiveDids()
             refreshDriveCandidates()
@@ -135,8 +179,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopRecording() {
-        guard !isDidScanning, !isLivePolling, !isDriveCollecting, !isBusy,
-              let store = captureStore, let sid = captureSessionID else { return }
+        guard !isDidScanning, !isLivePolling, !isDriveCollecting,
+              !isUnifiedCollecting, !isBusy, let store = captureStore, let sid = captureSessionID else { return }
         do {
             try store.closeSession(sid)
             store.flush()
@@ -147,6 +191,158 @@ final class AnalyzerViewModel: ObservableObject {
         captureStore = nil
         captureSessionID = nil
         isRecording = false
+        // Finalized sidecars are derived from the same in-memory survey rows and
+        // raw commands already flushed to the matching session SQLite.
+        try? writeStandardPIDExports()
+    }
+
+    /// Low-volume forensic markers for screen-lock state, app lifecycle and BLE changes.
+    func recordLifecycleEvent(kind: String, note: String) {
+        guard let store = captureStore, let sid = captureSessionID else { return }
+        store.addEvent(sessionID: sid, at: Date(), kind: kind, note: note)
+    }
+
+    func toggleExtraPID(_ pid: UInt8) {
+        guard !isLivePolling, !isBusy, !isStandardPIDSurveying else { return }
+        if selectedExtraPIDs.contains(pid) {
+            selectedExtraPIDs.remove(pid)
+        } else if selectedExtraPIDs.count < 4, !isStandardBitmapPID(pid),
+                  ![0x0C, 0x0D, 0x05, 0x5B, 0x9A].contains(pid) {
+            selectedExtraPIDs.insert(pid)
+        }
+    }
+
+    /// Read-only Mode 01 survey. This is mutually exclusive with live/drive/DID jobs.
+    /// Raw notifications and commands remain in SQLite; per-responder results are also
+    /// written as structured evidence events for offline reconstruction.
+    func startStandardPIDSurvey() {
+        guard isRecording, ble.state == "ready", elmInitialized, knownSignalsValidated,
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting,
+              !isUnifiedCollecting else {
+            statusMessage = "標準PID調査にはBLE接続・記録・初期化・既知信号確認が必要です"
+            return
+        }
+        isBusy = true
+        isStandardPIDSurveying = true
+        standardPIDProgress = "対応PIDビットマップを確認中"
+        statusMessage = "標準PID調査中（安全な読取専用Mode 01）"
+
+        standardPIDTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await prepareMode01()
+                var inventory = StandardPIDInventory()
+                var nextBases: [UInt8] = [0x00]
+                var visited: Set<UInt8> = []
+                var allPIDs: Set<UInt8> = []
+                while !nextBases.isEmpty {
+                    try Task.checkCancellation()
+                    let base = nextBases.removeFirst()
+                    guard visited.insert(base).inserted else { continue }
+                    let cmd = String(format: "01%02X", base)
+                    var bitmaps: [StandardPIDBitmap] = []
+                    for attempt in 0..<3 {
+                        try Task.checkCancellation()
+                        do {
+                            let reply = try await session.command(cmd, timeout: 4)
+                            append(reply)
+                            bitmaps = parseStandardPIDBitmaps(reply.text, base: base)
+                        } catch {
+                            recordLifecycleEvent(kind: "PID_BITMAP_RETRY",
+                                                 note: "pid=\(cmd) attempt=\(attempt+1) error=\(error)")
+                        }
+                        if !bitmaps.isEmpty { break }
+                        if attempt < 2 { try await Task.sleep(nanoseconds: 250_000_000) }
+                    }
+                    for bitmap in bitmaps {
+                        inventory.addBitmap(bitmap)
+                        allPIDs.formUnion(bitmap.supported.filter { !isStandardBitmapPID($0) })
+                        recordLifecycleEvent(
+                            kind: "PID_BITMAP",
+                            note: String(format: "base=%02X can=%@ mask=%08X",
+                                         base, bitmap.canID ?? "unknown", bitmap.mask)
+                        )
+                        if Int(base) < 0xE0 && bitmap.supported.contains(base &+ 0x20) {
+                            nextBases.append(base &+ 0x20)
+                        }
+                    }
+                    standardPIDInventory = inventory
+                    standardPIDProgress = "対応範囲 \(visited.count)件 / 候補 \(allPIDs.count)件"
+                }
+                let orderedPIDs = allPIDs.sorted()
+                recordLifecycleEvent(kind: "PID_SURVEY_PLAN",
+                                     note: "mode=01 read_only pids=\(orderedPIDs.map { String(format:"%02X",$0) }.joined(separator:","))")
+                for (index, pid) in orderedPIDs.enumerated() {
+                    try Task.checkCancellation()
+                    let cmd = String(format: "01%02X", pid)
+                    var readings: [StandardPIDReading] = []
+                    for attempt in 0..<2 {
+                        try Task.checkCancellation()
+                        var failureStatus: StandardPIDSampleStatus = .noData
+                        do {
+                            let response = try await session.command(cmd, timeout: 4)
+                            append(response)
+                            readings = readStandardPID(pid, from: response.text, at: Date(),
+                                                       latencyMs: response.latencyMs)
+                        } catch {
+                            failureStatus = .timeout
+                            recordLifecycleEvent(kind: "PID_RETRY",
+                                                 note: "pid=\(cmd) attempt=\(attempt+1) error=\(error)")
+                        }
+                        if !readings.isEmpty { break }
+                        inventory.addFailure(pid: pid, status: failureStatus)
+                        recordLifecycleEvent(kind: "PID_ATTEMPT_FAILURE",
+                                             note: "pid=\(cmd) status=\(failureStatus.rawValue) attempt=\(attempt+1)")
+                        if attempt == 0 { try await Task.sleep(nanoseconds: 300_000_000) }
+                    }
+                    for reading in readings {
+                        inventory.addReading(reading)
+                        saveStandardPIDReading(reading)
+                    }
+                    if readings.isEmpty {
+                        recordLifecycleEvent(kind: "PID_NO_RESPONSE", note: "pid=\(cmd) retryable=true")
+                    }
+                    standardPIDInventory = inventory
+                    standardPIDProgress = "実応答 \(index+1)/\(orderedPIDs.count) PID"
+                    if (index+1) % 8 == 0 {
+                        try await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                }
+                try writeStandardPIDExports()
+                standardPIDProgress = "調査完了：\(inventory.sortedRows.count)件（ECU別）"
+                statusMessage = "標準PID調査完了。候補を確認しCSV/JSONを共有できます"
+            } catch is CancellationError {
+                standardPIDProgress = "中断（再調査可能）"
+                statusMessage = "標準PID調査を中断しました"
+            } catch {
+                standardPIDProgress = "調査失敗：\(error.localizedDescription)"
+                statusMessage = standardPIDProgress
+            }
+            isStandardPIDSurveying = false
+            isBusy = false
+            standardPIDTask = nil
+        }
+    }
+
+    func stopStandardPIDSurvey() { standardPIDTask?.cancel() }
+
+    private func saveStandardPIDReading(_ reading: StandardPIDReading) {
+        recordLifecycleEvent(kind: "PID_SAMPLE",
+             note: "id=\(reading.identifier) status=\(reading.status.rawValue) payload=\(reading.payloadHex) " +
+                   "value=\(reading.value.map { String($0) } ?? "null") " +
+                   "latency_ms=\(reading.latencyMs.map { String($0) } ?? "unknown")")
+    }
+
+    private func writeStandardPIDExports() throws {
+        guard let sessionURL = recordingURL else { return }
+        let stem = sessionURL.deletingPathExtension().lastPathComponent
+        let directory = sessionURL.deletingLastPathComponent()
+        let csvURL = directory.appendingPathComponent(stem + "-pid-candidates.csv")
+        let jsonURL = directory.appendingPathComponent(stem + "-pid-candidates.json")
+        try standardPIDCSV(standardPIDInventory.sortedRows).write(to: csvURL, atomically: true, encoding: .utf8)
+        try standardPIDJSON(standardPIDInventory.sortedRows).write(to: jsonURL, options: .atomic)
+        latestPIDCSVURL = csvURL
+        latestPIDJSONURL = jsonURL
     }
 
     func addMarker(_ kind: String) {
@@ -169,19 +365,38 @@ final class AnalyzerViewModel: ObservableObject {
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             if let caps = session.negotiatedM5CAN {
-                vehicleProtocolLabel = caps.description
+                vehicleProtocolLabel = caps.isPassiveDiagnosticBench
+                    ? caps.description + " — CAN送信無効（実験用）"
+                    : caps.description
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
-                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming)"
+                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming) tx=\(caps.isPassiveDiagnosticBench ? "OFF" : "LEGACY")"
                     )
+                }
+            } else if session.m5canCapabilitiesRejected {
+                vehicleProtocolLabel = "M5CAN能力交渉エラー — 車両診断を安全停止"
+                if let store = captureStore, let sid = captureSessionID {
+                    store.addEvent(sessionID: sid, at: Date(),
+                                   kind: "M5CAN_PROTOCOL_REJECTED",
+                                   note: "reason=\(session.m5canCapabilityRejectionReason ?? "unspecified") vehicle_tx_blocked=true")
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
             }
-            elmInitialized = failed.isEmpty
+            let incompatible = session.m5canCapabilitiesRejected
+            let passive = session.negotiatedM5CAN?.isPassiveDiagnosticBench == true
+            elmInitialized = failed.isEmpty && !incompatible && !passive
             if !elmInitialized { knownSignalsValidated = false }
-            statusMessage = failed.isEmpty ? "ELM初期化完了" : "ELM初期化完了（失敗 \(failed.count)件）"
+            if incompatible {
+                statusMessage = "M5CAN能力交渉に失敗。CAN診断は安全のため無効です"
+            } else if passive {
+                statusMessage = "M5CAN実験ファーム（TX=OFF）。車両通信はできません"
+            } else {
+                statusMessage = failed.isEmpty
+                    ? "ELM初期化完了"
+                    : "ELM初期化完了（失敗 \(failed.count)件）"
+            }
             isBusy = false
         }
     }
@@ -204,14 +419,378 @@ final class AnalyzerViewModel: ObservableObject {
         }
     }
 
+    private func trackStandardReading(_ reading: StandardPIDReading) {
+        guard reading.status == .decoded || reading.status == .uninterpreted else { return }
+        let ascii = Array(reading.payloadHex.utf8)
+        let data = Data((0..<(ascii.count / 2)).compactMap { pair -> UInt8? in
+            UInt8(String(decoding: ascii[(pair * 2)..<(pair * 2 + 2)], as: UTF8.self), radix: 16)
+        })
+        signalChangeTracker.observePID(
+            pid: reading.pid, canID: reading.responseCANID,
+            value: reading.value, payload: data,
+            unit: reading.unit ?? "",
+            name: standardPIDCatalog[reading.pid]?.name ?? String(format: "PID %02X", reading.pid),
+            at: reading.timestamp
+        )
+    }
+
+
+    /// One operator action starts all read-only data collection on one
+    /// serialized ELM lane. The fixed baseline always has first priority.
+    /// Zero speed means "stationary by speed", never a verified P gear.
+    func startUnifiedCollection() {
+        guard isRecording, elmInitialized, knownSignalsValidated,
+              ble.state == "ready", !isBusy, !isUnifiedCollecting,
+              !isLivePolling, !isDriveCollecting, !isDidScanning,
+              !isStandardPIDSurveying,
+              let store = captureStore, let sid = captureSessionID else {
+            statusMessage = "接続・記録・通信初期化・既知信号確認を完了してください"
+            return
+        }
+        isUnifiedCollecting = true
+        unifiedUnknownProbes = 0
+        unifiedStandardProbes = 0
+        unifiedStage = "ライブ監視を開始しました"
+        store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_START",
+                       note: "Mode01/verified-DID; unknown-22 only after fresh stable zero and explicit P confirmation")
+        refreshDriveCandidates()
+        store.saveDrivePlan(sessionID: sid, at: Date(), candidates: driveCandidates)
+        store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_PLAN",
+                       note: "known_positive_dids=\(driveCandidates.count)")
+        unifiedTask = Task { [weak self] in
+            guard let self else { return }
+            var gate = AutomaticZeroSpeedGate()
+            var planner = UnifiedAcquisitionPlanner()
+            var bitmapQueue: [UInt8] = [0]
+            var seenBitmaps: Set<UInt8> = []
+            var pidQueue: [UInt8] = []
+            var seenPIDs: Set<UInt8> = []
+            var didQueue: [String: [UInt16]] = [:]
+            var turn = 0
+            var nextResponder = 0
+            var consecutiveBaselineErrors = 0
+            var lastCensusAt: Date = .distantPast
+            do {
+                while !Task.isCancelled {
+                    try Task.checkCancellation()
+                    guard ble.state == "ready", elmInitialized,
+                          isRecording else { break }
+                    let started = Date()
+                    // One active command at a time, never competing Tasks.
+                    do {
+                        try await prepareMode01()
+                        try await pollKnownCycle()
+                        consecutiveBaselineErrors = 0
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        gate.reset(reason: "基本信号の取得エラー")
+                        consecutiveBaselineErrors += 1
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_LIVE_ERROR",
+                                       note: error.localizedDescription)
+                        if consecutiveBaselineErrors >= 3 { throw error }
+                        continue
+                    }
+                    let sampledSpeed = speedKmh.map(Double.init)
+                    if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: sampledSpeed) {
+                        if stationaryConfirmed {
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_PARK_CONFIRMATION_REVOKED",
+                                           note: "motion_or_invalid_speed")
+                        }
+                        stationaryConfirmed = false
+                    }
+                    gate.observe(speedKmh: sampledSpeed, at: Date())
+                    unifiedZeroSeconds = gate.firstZeroAt.map {
+                        Date().timeIntervalSince($0)
+                    } ?? 0
+                    let moving = (speedKmh ?? 0) > 0
+                    let stableZero = mayResumeUnknownDID(
+                        stableZero: gate.canProbe(at: Date()),
+                        parkingConfirmed: stationaryConfirmed
+                    )
+                    unifiedStage = moving
+                        ? "走行中：ライブ・既知DID・標準PID取得"
+                        : stableZero
+                            ? "車速0が5秒以上安定・P確認済み：未知DID探索"
+                            : "ライブ取得中：車速0の安定とP確認待ち（未知DIDは送信しません）"
+                    turn += 1
+
+                    // ECU discovery only uses previously validated read-only
+                    // requests. Each read is guarded by a new speed sample.
+                    if stableZero && observedEcus.isEmpty &&
+                        Date().timeIntervalSince(lastCensusAt) >= 30 {
+                        lastCensusAt = Date()
+                        do {
+                        var found: [String: EcuResponder] = [:]
+                        for req in safeEcuCensusRequests {
+                            try Task.checkCancellation()
+                            guard let speed = try? await readScanSpeed(),
+                                  speed <= 0.1 else {
+                                gate.reset(reason: "ECU確認時の車速不明")
+                                break
+                            }
+                            gate.observe(speedKmh: speed, at: Date())
+                            guard gate.canProbe(at: Date()) else { break }
+                            try await selectHeader(req.headerCommand)
+                            let result = try await session.command(req.command, timeout: 3.0)
+                            append(result)
+                            for ecu in ecuResponders(in: result.text) {
+                                found[ecu.responseCanID] = ecu
+                            }
+                        }
+                        if !found.isEmpty {
+                            observedEcus = found.values.sorted { $0.source < $1.source }
+                            didScanEcu = observedEcus[0].source
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_ECU_FOUND",
+                                           note: observedEcus.map(\.source).joined(separator: ","))
+                            let unsupported = observedEcus.filter {
+                                !PhysicalUDS22Compatibility.allows(
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction)
+                            }
+                            if !unsupported.isEmpty {
+                                store.addEvent(sessionID: sid, at: Date(),
+                                               kind: "UNIFIED_ECU_UNSUPPORTED",
+                                               note: "adapter=M5CAN_1.x physical_UDS22_unsupported=" +
+                                                   unsupported.map(\.source).joined(separator: ","))
+                            }
+                        }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            gate.reset(reason: "ECU確認エラー")
+                            store.addEvent(sessionID: sid, at: Date(),
+                                           kind: "UNIFIED_ECU_ERROR",
+                                           note: error.localizedDescription)
+                        }
+                    }
+                    if didQueue.isEmpty && !observedEcus.isEmpty {
+                        let priority = Array(UInt16(0x2000)...UInt16(0x20FF)) +
+                                       Array(UInt16(0x2200)...UInt16(0x22FF)) +
+                                       Array(UInt16(0x2600)...UInt16(0x26FF))
+                        for ecu in observedEcus where PhysicalUDS22Compatibility.allows(
+                            ecu: ecu.source, m5canRestricted: m5canPhysicalECURestriction
+                        ) {
+                            let old = loadDidScanHistory(
+                                from: captureDatabaseURLs(), ecu: ecu.source,
+                                start: 0x2000, end: 0x26FF
+                            ).completed
+                            didQueue[ecu.source] = priority.filter { !old.contains($0) }
+                        }
+                    }
+                    // Continue low-rate sampling after the first survey so
+                    // changing supported PIDs are actually discovered over time.
+                    if pidQueue.isEmpty && !seenPIDs.isEmpty {
+                        pidQueue = seenPIDs.sorted()
+                    }
+                    let unknownAvailable = didQueue.values.contains { !$0.isEmpty }
+                    let action = planner.next(
+                        isMoving: moving, zeroSpeedAuthorized: stableZero,
+                        hasBitmap: !bitmapQueue.isEmpty,
+                        hasStandardPID: !pidQueue.isEmpty,
+                        hasKnownDID: !driveCandidates.isEmpty,
+                        hasUnknownDID: unknownAvailable
+                    )
+
+                    // Background errors must never silence the baseline.
+                    do {
+                        switch action {
+                        case .supportedPIDBitmap:
+                            let base = bitmapQueue.removeFirst()
+                            if seenBitmaps.insert(base).inserted {
+                                try await prepareMode01()
+                                let result = try await session.command(
+                                    String(format: "01%02X", base), timeout: 3)
+                                append(result)
+                                for bitmap in parseStandardPIDBitmaps(result.text, base: base) {
+                                    standardPIDInventory.addBitmap(bitmap)
+                                    for pid in bitmap.supported
+                                        where !isStandardBitmapPID(pid) &&
+                                              ![0x05, 0x0C, 0x0D, 0x5B, 0x9A].contains(pid) {
+                                        if seenPIDs.insert(pid).inserted {
+                                            pidQueue.append(pid)
+                                        }
+                                    }
+                                    if base < 0xE0,
+                                       bitmap.supported.contains(base &+ 0x20),
+                                       !seenBitmaps.contains(base &+ 0x20),
+                                       !bitmapQueue.contains(base &+ 0x20) {
+                                        bitmapQueue.append(base &+ 0x20)
+                                    }
+                                }
+                                pidQueue.sort()
+                                standardPIDProgress = "bitmap: \(seenBitmaps.count)ページ / 候補 \(pidQueue.count)件"
+                            }
+                        case .standardPID:
+                            let pid = pidQueue.removeFirst()
+                            try await prepareMode01()
+                            let result = try await session.command(
+                                String(format: "01%02X", pid), timeout: 3)
+                            append(result)
+                            let readings = readStandardPID(
+                                pid, from: result.text, at: Date(),
+                                latencyMs: result.latencyMs
+                            )
+                            if readings.isEmpty {
+                                standardPIDInventory.addFailure(pid: pid, status: .noData)
+                            }
+                            for reading in readings {
+                                standardPIDInventory.addReading(reading)
+                                saveStandardPIDReading(reading)
+                                trackStandardReading(reading)
+                            }
+                            unifiedStandardProbes += 1
+                        case .knownDrivingDID:
+                            if let candidate = schedulerFor(driveCandidates).next(
+                                now: Date(), context: drivingContext
+                            ) {
+                                let outcome = await sampleKnownDrivingDID(candidate)
+                                _ = recordAdaptiveDriveSample(
+                                    candidate, outcome: outcome,
+                                    scheduler: schedulerFor(driveCandidates),
+                                    store: store, sessionID: sid
+                                )
+                                if outcome.status == .positive {
+                                    signalChangeTracker.observeDID(
+                                        ecu: candidate.ecu, did: candidate.did,
+                                        payload: outcome.payload, at: Date()
+                                    )
+                                }
+                            }
+                        case .stationaryUnknownDID:
+                            let sources = observedEcus.filter {
+                                PhysicalUDS22Compatibility.allows(
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction
+                                )
+                            }.map(\.source)
+                            if !sources.isEmpty {
+                                nextResponder %= sources.count
+                                var selection: (source: String, did: UInt16)?
+                                for offset in 0..<sources.count {
+                                    let name = sources[(nextResponder + offset) % sources.count]
+                                    if var remaining = didQueue[name], !remaining.isEmpty {
+                                        selection = (name, remaining.removeFirst())
+                                        didQueue[name] = remaining
+                                        nextResponder = (nextResponder + offset + 1) % sources.count
+                                        break
+                                    }
+                                }
+                                if let item = selection {
+                                    let checkedSpeed = try? await readScanSpeed()
+                                    if ParkConfirmationGuard.requiresNewConfirmation(speedKmh: checkedSpeed) {
+                                        if stationaryConfirmed {
+                                            store.addEvent(sessionID: sid, at: Date(),
+                                                           kind: "UNIFIED_PARK_CONFIRMATION_REVOKED",
+                                                           note: "preflight_motion_or_invalid_speed")
+                                        }
+                                        stationaryConfirmed = false
+                                    }
+                                    if let checkedSpeed, checkedSpeed >= 0,
+                                       checkedSpeed.isFinite, checkedSpeed <= 0.1 {
+                                        gate.observe(speedKmh: checkedSpeed, at: Date())
+                                    } else {
+                                        gate.reset(reason: "未知DID直前の車速不明・走行検出")
+                                    }
+                                    if mayResumeUnknownDID(
+                                        stableZero: gate.canProbe(at: Date()),
+                                        parkingConfirmed: stationaryConfirmed
+                                    ), !Task.isCancelled,
+                                       PhysicalUDS22Compatibility.allows(
+                                        ecu: item.source, m5canRestricted: m5canPhysicalECURestriction
+                                       ),
+                                       let header = physicalRequestHeaderCommand(for: item.source) {
+                                        try await selectHeader(header)
+                                        let cmd = String(format: "22%04X", item.did)
+                                        let result = try await session.command(cmd, timeout: 2.5)
+                                        append(result)
+                                        let outcome = classifyUDS22Text(
+                                            result.text, ecu: item.source, did: item.did,
+                                            latencyMs: result.latencyMs
+                                        )
+                                        store.saveDidScan(sessionID: sid, at: Date(), outcome: outcome)
+                                        didScanCurrent = "ECU \(item.source) / \(cmd) / \(outcome.status.rawValue)"
+                                        unifiedUnknownProbes += 1
+                                        if outcome.status == .positive ||
+                                            outcome.status == .positivePartial {
+                                            refreshPositiveDids(flush: true)
+                                            refreshDriveCandidates()
+                                            store.saveDrivePlan(
+                                                sessionID: sid, at: Date(), candidates: driveCandidates
+                                            )
+                                        }
+                                    } else {
+                                        didQueue[item.source, default: []].insert(item.did, at: 0)
+                                    }
+                                }
+                            }
+                        case .baseline, .idle:
+                            break
+                        }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_BACKGROUND_ERROR",
+                                       note: "action=\(action.rawValue) \(error.localizedDescription)")
+                        // Fail closed for unknown DID. Do not retry the same
+                        // unknown request without another stable-zero check.
+                    }
+
+                    changingSignals = signalChangeTracker.changingSignals()
+                    if turn.isMultiple(of: 10) {
+                        store.addEvent(sessionID: sid, at: Date(),
+                                       kind: "UNIFIED_HEARTBEAT",
+                                       note: "cycle=\(turn) pid=\(unifiedStandardProbes) did=\(unifiedUnknownProbes)")
+                    }
+                    let delay = pollingDelaySeconds(
+                        requestCount: 5,
+                        targetRequestRateHz: max(1, livePollingRequestRateHz),
+                        elapsedSeconds: Date().timeIntervalSince(started),
+                        unthrottled: false
+                    )
+                    if delay > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                unifiedStage = "通信エラー：統合収集を停止"
+                statusMessage = "統合収集を停止：\(error.localizedDescription)"
+                store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_FATAL_ERROR",
+                               note: error.localizedDescription)
+            }
+            store.addEvent(sessionID: sid, at: Date(), kind: "UNIFIED_STOP",
+                           note: "standard=\(unifiedStandardProbes) unknown=\(unifiedUnknownProbes)")
+            store.saveDriveSamplingState(
+                sessionID: sid, at: Date(),
+                seeds: driveScheduler?.snapshots() ?? []
+            )
+            store.flush()
+            try? writeStandardPIDExports()
+            isUnifiedCollecting = false
+            unifiedTask = nil
+            if !unifiedStage.contains("エラー") && !unifiedStage.contains("BLE中断") {
+                unifiedStage = "統合収集を停止しました。SQLite記録を終了して共有できます"
+            }
+        }
+    }
+
+    func stopUnifiedCollection() {
+        unifiedTask?.cancel()
+        unifiedStage = "停止処理中：通信の応答後に保存します"
+    }
+
     func startLivePolling() {
         guard ble.state == "ready", elmInitialized, knownSignalsValidated,
-              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting else {
+              !isBusy, !isLivePolling, !isDidScanning, !isDriveCollecting,
+              !isUnifiedCollecting else {
             statusMessage = "BLE接続・ELM初期化・既知信号確認を完了してください"
             return
         }
         isLivePolling = true
         liveEffectiveRequestRateHz = 0
+        liveEffectivePIDRateHz = 0
+        liveLastBatchSize = 1
 
         let targetRate = max(1.0, livePollingRequestRateHz)
         let unthrottled = livePollingUnthrottled
@@ -241,7 +820,7 @@ final class AnalyzerViewModel: ObservableObject {
 
                     let elapsed = Date().timeIntervalSince(cycleStarted)
                     let delay = pollingDelaySeconds(
-                        requestCount: 5,
+                        requestCount: 5 + selectedExtraPIDs.count,
                         targetRequestRateHz: targetRate,
                         elapsedSeconds: elapsed,
                         unthrottled: unthrottled
@@ -256,7 +835,10 @@ final class AnalyzerViewModel: ObservableObject {
                         0.001,
                         Date().timeIntervalSince(cycleStarted)
                     )
-                    liveEffectiveRequestRateHz = 5.0 / cycleSeconds
+                    let batchEnabled = session.negotiatedM5CAN?.supportsOBD01 == true
+                    liveLastBatchSize = batchEnabled ? 5 : 1
+                    liveEffectiveRequestRateHz = Double((batchEnabled ? 1 : 5) + selectedExtraPIDs.count) / cycleSeconds
+                    liveEffectivePIDRateHz = Double(5 + selectedExtraPIDs.count) / cycleSeconds
                 }
             } catch is CancellationError {
             } catch {
@@ -269,10 +851,13 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     func stopLivePolling() {
+        try? writeStandardPIDExports()
         liveTask?.cancel()
         liveTask = nil
         isLivePolling = false
         liveEffectiveRequestRateHz = 0
+        liveEffectivePIDRateHz = 0
+        liveLastBatchSize = 1
         statusMessage = "ライブ取得停止"
     }
 
@@ -356,7 +941,8 @@ final class AnalyzerViewModel: ObservableObject {
     }
 
     private func startDidScan(start: UInt16, end: UInt16, adaptive: Bool) {
-        guard !isBusy, !isLivePolling, !isDriveCollecting, !isDidScanning else { return }
+        guard !isBusy, !isLivePolling, !isDriveCollecting,
+              !isDidScanning, !isUnifiedCollecting else { return }
         guard stationaryConfirmed else {
             statusMessage = "DID探索前に完全停止・Pレンジ確認をチェックしてください"
             return
@@ -379,6 +965,14 @@ final class AnalyzerViewModel: ObservableObject {
         }
         guard observedEcus.contains(where: { $0.source == ecu }) else {
             statusMessage = "先に安全なECU候補確認を実行し、観測されたECUを選択してください"
+            return
+        }
+        guard PhysicalUDS22Compatibility.allows(
+            ecu: ecu, m5canRestricted: m5canPhysicalECURestriction
+        ) else {
+            statusMessage = "M5CAN PROTO 1.xはECU 01以外の物理UDS22に未対応です。探索は送信せず中止しました"
+            store.addEvent(sessionID: sid, at: Date(), kind: "DID_SCAN_UNSUPPORTED_ECU",
+                           note: "ecu=\(ecu) adapter=M5CAN_1.x")
             return
         }
 
@@ -810,7 +1404,7 @@ final class AnalyzerViewModel: ObservableObject {
     /// Adaptive scheduling moves stable payloads to sparse rechecks (never bans them).
     func startDriveCollection() {
         guard !isBusy, !isDidScanning, !isLivePolling, !isDriveCollecting,
-              ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
+              !isUnifiedCollecting, ble.state == "ready", isRecording, elmInitialized, knownSignalsValidated,
               let store = captureStore, let sid = captureSessionID else {
             statusMessage = "BLE・記録・ELM・既知信号を準備してから走行解析を開始してください"
             return
@@ -905,6 +1499,12 @@ final class AnalyzerViewModel: ObservableObject {
 
     private func sampleKnownDrivingDID(_ candidate: DriveDID) async -> DidProbeOutcome {
         // No ATH0 retry, no unknown DID enumeration, no write/reset service.
+        guard PhysicalUDS22Compatibility.allows(
+            ecu: candidate.ecu, m5canRestricted: m5canPhysicalECURestriction
+        ) else {
+            return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error,
+                                   rawText: "adapter_unsupported_physical_ecu")
+        }
         guard let header = physicalRequestHeaderCommand(for: candidate.ecu) else {
             return DidProbeOutcome(ecu: candidate.ecu, did: candidate.did, status: .error)
         }
@@ -1199,8 +1799,7 @@ final class AnalyzerViewModel: ObservableObject {
             successes = texts.map(elmResponseSuccess)
             // SQLite analysis expects the five reference commands individually.
             // Keep synthetic per-item rows alongside the original batch raw
-            // command; per-item latency is unknown, so record 0 rather than
-            // incorrectly copying the entire batch RTT to each item.
+            // command. Persist NULL for unknown per-item latency, not a measured 0ms.
             for (index, key) in keys.enumerated() {
                 recordCommand(ElmCommandResult(
                     command: key,
@@ -1208,7 +1807,7 @@ final class AnalyzerViewModel: ObservableObject {
                     text: texts[index],
                     latencyMs: 0,
                     success: successes[index]
-                ))
+                ), syntheticBatchItem: true)
             }
         } else {
             var results: [ElmCommandResult] = []
@@ -1221,6 +1820,41 @@ final class AnalyzerViewModel: ObservableObject {
             successes = results.map(\.success)
         }
 
+        // Additional standard PIDs are queried individually after the known-signal
+        // batch. The M5CAN v1.x batch protocol only guarantees the five known keys.
+        if !requireComplete {
+            for pid in selectedExtraPIDs.sorted() {
+                try Task.checkCancellation()
+                let cmd = String(format: "01%02X", pid)
+                do {
+                    let response = try await session.command(cmd)
+                    append(response)
+                    let readings = readStandardPID(pid, from: response.text, at: Date(),
+                                                   latencyMs: response.latencyMs)
+                    if readings.isEmpty {
+                        standardPIDInventory.addFailure(pid: pid, status: .noData)
+                        recordLifecycleEvent(kind: "PID_OPTIONAL_NO_DATA", note: "pid=\(cmd)")
+                    }
+                    for reading in readings {
+                        standardPIDInventory.addReading(reading)
+                        saveStandardPIDReading(reading)
+                    }
+                } catch {
+                    // An optional extra PID must never stop baseline RPM/speed/HV.
+                    standardPIDInventory.addFailure(pid: pid, status: .timeout)
+                    recordLifecycleEvent(kind: "PID_OPTIONAL_ERROR", note: "pid=\(cmd) \(error)")
+                }
+            }
+        }
+
+        // These readings also feed the bounded automatic change-graph cache.
+        // The existing live metrics still use their original decoders.
+        let knownPIDs: [UInt8] = [0x0C, 0x0D, 0x05, 0x5B]
+        for (index, pid) in knownPIDs.enumerated() {
+            for reading in readStandardPID(pid, from: texts[index], at: Date()) {
+                trackStandardReading(reading)
+            }
+        }
         let rpmValue = decodeEngineRPM(texts[0])
         let speedValue = decodeVehicleSpeed(texts[1])
         let coolantValue = decodeCoolantC(texts[2])
@@ -1303,9 +1937,11 @@ final class AnalyzerViewModel: ObservableObject {
         )
     }
 
-    private func recordCommand(_ result: ElmCommandResult) {
+    private func recordCommand(_ result: ElmCommandResult,
+                               syntheticBatchItem: Bool = false) {
         guard let store = captureStore, let sid = captureSessionID else { return }
-        store.appendCommand(sessionID: sid, at: Date(), result: result)
+        store.appendCommand(sessionID: sid, at: Date(), result: result,
+                            syntheticBatchItem: syntheticBatchItem)
     }
 
     private func append(_ result: ElmCommandResult) {

@@ -1,13 +1,23 @@
 import SwiftUI
+import UIKit
 import HondaAnalyzerCore
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AnalyzerViewModel()
     @State private var showConnectionScreen = true
 
+    /// This is an idle auto-lock policy, not a background execution entitlement.
+    /// SQLite recording keeps the display awake even if BLE temporarily drops.
+    private var requiresAwakeDisplay: Bool {
+        model.isRecording || model.isLivePolling ||
+        model.isDidScanning || model.isDriveCollecting ||
+        model.isStandardPIDSurveying || model.isUnifiedCollecting
+    }
+
     var body: some View {
         Group {
-            if showConnectionScreen || model.ble.state != "ready" {
+            if showConnectionScreen {
                 BLEConnectionView(model: model) {
                     showConnectionScreen = false
                 }
@@ -15,7 +25,50 @@ struct ContentView: View {
                 FinalAnalyzerWorkspace(model: model) {
                     showConnectionScreen = true
                 }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if model.isRecording || model.ble.state != "ready" {
+                        HStack(spacing: 10) {
+                            if model.isRecording {
+                                Label("SQLite記録中・自動スリープ防止中", systemImage: "record.circle.fill")
+                                    .foregroundStyle(.red)
+                            }
+                            if model.ble.state != "ready" {
+                                Label("BLE中断：記録は保持されています", systemImage: "wifi.slash")
+                                Spacer(minLength: 4)
+                                Button("再接続") { showConnectionScreen = true }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.regularMaterial)
+                    }
+                }
             }
+        }
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = requiresAwakeDisplay
+        }
+        .onChange(of: requiresAwakeDisplay) { _, awake in
+            UIApplication.shared.isIdleTimerDisabled = awake
+            model.recordLifecycleEvent(kind: "DISPLAY_IDLE_LOCK", note: awake ? "disabled" : "enabled")
+        }
+        .onChange(of: scenePhase) { _, phase in
+            let label: String
+            switch phase {
+            case .active: label = "active"
+            case .inactive: label = "inactive"
+            case .background: label = "background"
+            @unknown default: label = "unknown"
+            }
+            model.recordLifecycleEvent(kind: "APP_SCENE_PHASE", note: label)
+            if phase == .active {
+                UIApplication.shared.isIdleTimerDisabled = requiresAwakeDisplay
+            }
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
 }
@@ -97,6 +150,16 @@ private struct BLEConnectionView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.isBusy || model.isLivePolling || model.isDidScanning)
+                    }
+                }
+
+                if model.isRecording {
+                    Section("記録の状態") {
+                        Label("SQLite記録中・自動スリープ防止中", systemImage: "record.circle.fill")
+                            .foregroundStyle(.red)
+                        Text("Bluetoothが切断されても記録ファイルは保持されます。再接続後、解析画面で通信を再確認してください。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
