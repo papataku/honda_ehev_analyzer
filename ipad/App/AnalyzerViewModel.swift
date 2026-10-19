@@ -146,10 +146,11 @@ final class AnalyzerViewModel: ObservableObject {
             recordingFile = url.lastPathComponent
             isRecording = true
 
-            // Evidence-first workflow: communication readiness must be proven
-            // again inside every new capture session so initialization and
-            // known-signal evidence are present in that SQLite file.
-            session.resetProtocolNegotiation()
+            // Revalidate adapter capabilities for each SQLite capture, but
+            // starting a recording is not a BLE disconnect. Retain the M5CAN
+            // identity and strongest already-negotiated protocol on this link
+            // until initializeELM() has completed its fresh handshake.
+            session.invalidateCapabilitiesForNewCapture()
             vehicleProtocolLabel = "未確認（ELM327互換）"
             elmInitialized = false
             knownSignalsValidated = false
