@@ -282,6 +282,59 @@ final class M5CANPassiveHandshakeIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordingAndSameLinkReinitializationCannotDowngradePassiveCANPolicy() async throws {
+        let fake = PassiveM5CANFake()
+        let session = ElmCommandSession(transport: fake)
+        _ = await session.initialize()
+        XCTAssertTrue(session.negotiatedM5CAN?.isPassiveDiagnosticBench == true)
+        session.invalidateCapabilitiesForNewCapture()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        XCTAssertEqual(session.m5canCapabilityRejectionReason,
+                       "caps_renegotiation_required")
+        let before = fake.commands.count
+        do {
+            _ = try await session.command("010C")
+            XCTFail("Starting SQLite recording is not authority to reset CAN safeguards")
+        } catch ElmCommandError.m5canUnrecognizedCapabilities {
+            // No BLE write.
+        }
+        XCTAssertEqual(fake.commands.count, before)
+
+        // Same GATT connection, but the adapter now falsely identifies as an
+        // ELM327 and sends '?' for CAPS. An already negotiated TX=OFF contract
+        // must not downgrade into a generic legacy transmit path.
+        fake.atzIdentity = "ELM327 v1.5"
+        fake.atiIdentity = "ELM327 v1.5"
+        fake.capability = "?"
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertNil(session.negotiatedM5CAN)
+        XCTAssertTrue(session.m5canCapabilitiesRejected)
+        XCTAssertEqual(session.m5canCapabilityRejectionReason,
+                       "caps_downgrade_requires_reconnect")
+        let after = fake.commands.count
+        do {
+            _ = try await session.command("010D")
+            XCTFail("A previously negotiated M5CAN requires real BLE replacement to downgrade")
+        } catch ElmCommandError.m5canUnrecognizedCapabilities {
+            // No CAN request.
+        }
+        XCTAssertEqual(fake.commands.count, after)
+
+        // A genuine BLE disconnect/replacement is recorded by the caller and
+        // explicitly clears the latch. Truly old M5CAN '?' remains supported.
+        session.resetProtocolNegotiation()
+        fake.atzIdentity = "M5CAN ELM327 compatible"
+        fake.atiIdentity = "M5CAN ELM327 compatible"
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.negotiatedM5CAN)
+    }
+
+    @MainActor
     func testLegacyNormalM5CAN1Point1RemainsParseable() throws {
         let response = "M5CAN-CAPS PROTO=1.1 FW=0.4.4 BATCH=16 " +
             "OPS=OBD01,UDS22 STREAM=0 LEASE=IMPLICIT"
