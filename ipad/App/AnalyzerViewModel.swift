@@ -146,10 +146,11 @@ final class AnalyzerViewModel: ObservableObject {
             recordingFile = url.lastPathComponent
             isRecording = true
 
-            // Evidence-first workflow: communication readiness must be proven
-            // again inside every new capture session so initialization and
-            // known-signal evidence are present in that SQLite file.
-            session.resetProtocolNegotiation()
+            // Revalidate adapter capabilities for each SQLite capture, but
+            // starting a recording is not a BLE disconnect. Retain the M5CAN
+            // identity and strongest already-negotiated protocol on this link
+            // until initializeELM() has completed its fresh handshake.
+            session.invalidateCapabilitiesForNewCapture()
             vehicleProtocolLabel = "未確認（ELM327互換）"
             elmInitialized = false
             knownSignalsValidated = false
@@ -364,19 +365,38 @@ final class AnalyzerViewModel: ObservableObject {
             for result in results { append(result) }
             let failed = results.filter { !$0.success }
             if let caps = session.negotiatedM5CAN {
-                vehicleProtocolLabel = caps.description
+                vehicleProtocolLabel = caps.isPassiveDiagnosticBench
+                    ? caps.description + " — CAN送信無効（実験用）"
+                    : caps.description
                 if let store = captureStore, let sid = captureSessionID {
                     store.addEvent(
                         sessionID: sid, at: Date(), kind: "M5CAN_PROTOCOL",
-                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming)"
+                        note: "proto=\(caps.major).\(caps.minor) firmware=\(caps.firmwareVersion) batch=\(caps.maxBatchIDs) obd01=\(caps.supportsOBD01) uds22=\(caps.supportsUDS22) stream=\(caps.supportsStreaming) tx=\(caps.isPassiveDiagnosticBench ? "OFF" : "LEGACY")"
                     )
+                }
+            } else if session.m5canCapabilitiesRejected {
+                vehicleProtocolLabel = "M5CAN能力交渉エラー — 車両診断を安全停止"
+                if let store = captureStore, let sid = captureSessionID {
+                    store.addEvent(sessionID: sid, at: Date(),
+                                   kind: "M5CAN_PROTOCOL_REJECTED",
+                                   note: "reason=\(session.m5canCapabilityRejectionReason ?? "unspecified") vehicle_tx_blocked=true")
                 }
             } else {
                 vehicleProtocolLabel = "標準ELM327通信（専用プロトコル未確認・無効）"
             }
-            elmInitialized = failed.isEmpty
+            let incompatible = session.m5canCapabilitiesRejected
+            let passive = session.negotiatedM5CAN?.isPassiveDiagnosticBench == true
+            elmInitialized = failed.isEmpty && !incompatible && !passive
             if !elmInitialized { knownSignalsValidated = false }
-            statusMessage = failed.isEmpty ? "ELM初期化完了" : "ELM初期化完了（失敗 \(failed.count)件）"
+            if incompatible {
+                statusMessage = "M5CAN能力交渉に失敗。CAN診断は安全のため無効です"
+            } else if passive {
+                statusMessage = "M5CAN実験ファーム（TX=OFF）。車両通信はできません"
+            } else {
+                statusMessage = failed.isEmpty
+                    ? "ELM初期化完了"
+                    : "ELM初期化完了（失敗 \(failed.count)件）"
+            }
             isBusy = false
         }
     }
@@ -527,7 +547,7 @@ final class AnalyzerViewModel: ObservableObject {
                                            note: observedEcus.map(\.source).joined(separator: ","))
                             let unsupported = observedEcus.filter {
                                 !PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction)
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction)
                             }
                             if !unsupported.isEmpty {
                                 store.addEvent(sessionID: sid, at: Date(),
@@ -641,7 +661,7 @@ final class AnalyzerViewModel: ObservableObject {
                         case .stationaryUnknownDID:
                             let sources = observedEcus.filter {
                                 PhysicalUDS22Compatibility.allows(
-                                    ecu: $0.source, m5canRestricted: m5canPhysicalECURestriction
+                                    ecu: $0.source, m5canRestricted: self.m5canPhysicalECURestriction
                                 )
                             }.map(\.source)
                             if !sources.isEmpty {

@@ -162,8 +162,16 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         final class FakeTransport: ElmByteTransport {
             var onReceive: ((Data) -> Void)?
             var writes: [String] = []
+            var autoInitialize = true
             func write(_ data: Data) throws {
-                writes.append(String(decoding: data, as: UTF8.self))
+                let wire = String(decoding: data, as: UTF8.self)
+                writes.append(wire)
+                guard autoInitialize else { return }
+                let command = wire.trimmingCharacters(in: .whitespacesAndNewlines)
+                let reply = (command == "ATZ" || command == "ATI")
+                    ? "M5CAN v0.3 ELM-CAN compatible"
+                    : (command == "ATM5CAP" ? "?" : "OK")
+                emit(reply + "\r>")
             }
             func emit(_ text: String) {
                 onReceive?(Data(text.utf8))
@@ -172,12 +180,12 @@ final class HondaAnalyzerCoreTests: XCTestCase {
 
         let transport = FakeTransport()
         let session = ElmCommandSession(transport: transport)
-
-        let identify = Task { try await session.command("ATI", timeout: 1.0) }
-        await Task.yield()
-        XCTAssertEqual(transport.writes, ["ATI\r"])
-        transport.emit("M5CAN v0.3 ELM-CAN compatible\r>")
-        _ = try await identify.value
+        _ = await session.initialize()
+        XCTAssertTrue(session.identifiesAsM5CAN)
+        XCTAssertFalse(session.m5canCapabilitiesRejected)
+        XCTAssertNil(session.negotiatedM5CAN) // Explicit old-firmware '?' fallback.
+        transport.autoInitialize = false
+        transport.writes.removeAll()
 
         let rpm = Task { try await session.command("010C", timeout: 1.0) }
         await Task.yield()
@@ -257,7 +265,9 @@ final class HondaAnalyzerCoreTests: XCTestCase {
         transport.emit("M5CAN v0.3 ELM-CAN compatible\r>")
         _ = try await m5.value
 
-        // The next adapter's reset identifies itself as a normal ELM327.
+        // A verified BLE generation change must invalidate the old M5CAN
+        // identity; an arbitrary same-link ATZ is no longer sufficient.
+        session.resetProtocolNegotiation()
         let kw = Task { try await session.command("ATZ", timeout: 1.0) }
         await Task.yield()
         transport.emit("ELM327 v1.5\r>")
