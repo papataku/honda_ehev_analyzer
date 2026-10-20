@@ -1,0 +1,73 @@
+name: iPad Virtual BLE Prototype
+
+on:
+  push:
+    branches:
+      - experiment/ipad-ble-virtual-peripheral
+    paths:
+      - "ipad/**"
+      - "docs/IPAD_VIRTUAL_BLE_PROTOTYPE.md"
+      - ".github/workflows/ipad-virtual-ble.yml"
+  pull_request:
+    paths:
+      - "ipad/**"
+      - ".github/workflows/ipad-virtual-ble.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  virtual-ble:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Swift core and virtual BLE tests
+        working-directory: ipad
+        run: swift test
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+
+      - name: Generate Xcode project
+        working-directory: ipad
+        run: xcodegen generate
+
+      - name: Build iPad Simulator app
+        working-directory: ipad
+        run: |
+          xcodebuild -project HondaAnalyzer.xcodeproj -scheme HondaAnalyzer \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$PWD/build" CODE_SIGNING_ALLOWED=NO build
+
+      - name: Launch virtual-BLE mode and capture Simulator screenshot
+        working-directory: ipad
+        run: |
+          python3 - <<'PY' > /tmp/ble-ipad-udid
+          import json, subprocess
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          candidates = [d["udid"] for ds in data["devices"].values() for d in ds if "iPad" in d["name"] and d["state"] == "Shutdown"]
+          if not candidates:
+              raise SystemExit("No available shutdown iPad Simulator")
+          print(candidates[0])
+          PY
+          UDID="$(cat /tmp/ble-ipad-udid)"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$PWD/build/Build/Products/Debug-iphonesimulator/HondaAnalyzer.app"
+          xcrun simctl launch "$UDID" com.papataku.HondaAnalyzer --ble-sim
+          sleep 4
+          mkdir -p simulator-evidence
+          xcrun simctl io "$UDID" screenshot simulator-evidence/virtual-ble-launch.png
+          xcrun simctl shutdown "$UDID"
+
+      - name: Publish visual evidence (1 day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipad-virtual-ble-screen
+          path: ipad/simulator-evidence/virtual-ble-launch.png
+          if-no-files-found: ignore
+          retention-days: 1
